@@ -1,0 +1,17 @@
+{
+  "name": "muscle-training-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "自分用の筋トレ管理アプリ (PWA, Turso/libSQL, パスワード保護)",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.17.4"
+  }
+}

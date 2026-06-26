@@ -1,0 +1,164 @@
+:root {
+  --bg: #0f1115;
+  --surface: #181b22;
+  --surface-2: #20242e;
+  --border: #2a2f3a;
+  --text: #e6e9ef;
+  --muted: #8b93a3;
+  --accent: #4ade80;
+  --accent-d: #22c55e;
+  --danger: #f87171;
+  --blue: #60a5fa;
+  --radius: 14px;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.5;
+  padding-bottom: 76px;
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+header {
+  position: sticky; top: 0; z-index: 10;
+  background: rgba(15,17,21,.85);
+  backdrop-filter: blur(8px);
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+}
+header h1 { font-size: 18px; margin: 0; font-weight: 700; }
+header .logo { color: var(--accent); font-size: 22px; }
+
+main { padding: 16px; }
+.view { display: none; }
+.view.active { display: block; animation: fade .2s ease; }
+@keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+
+h2 { font-size: 16px; margin: 4px 0 12px; color: var(--muted); font-weight: 600; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.card.tap { cursor: pointer; transition: background .15s; }
+.card.tap:active { background: var(--surface-2); }
+
+.row { display: flex; gap: 10px; align-items: center; }
+.row.between { justify-content: space-between; }
+.row.wrap { flex-wrap: wrap; }
+.grow { flex: 1; min-width: 0; }
+.muted { color: var(--muted); font-size: 13px; }
+.small { font-size: 12px; }
+.big { font-size: 26px; font-weight: 700; }
+.accent { color: var(--accent); }
+.right { text-align: right; }
+
+/* 統計カードグリッド */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+.stat .label { color: var(--muted); font-size: 12px; }
+.stat .val { font-size: 24px; font-weight: 700; margin-top: 4px; }
+.stat .unit { font-size: 13px; color: var(--muted); font-weight: 400; }
+
+/* フォーム */
+label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+input, select, textarea {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-size: 16px;
+  font-family: inherit;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+.field { margin-bottom: 12px; }
+.field-row { display: flex; gap: 10px; }
+.field-row > .field { flex: 1; }
+
+button {
+  font-family: inherit; font-size: 15px; font-weight: 600;
+  border: none; border-radius: 10px; padding: 12px 16px;
+  background: var(--surface-2); color: var(--text); cursor: pointer;
+}
+button:active { transform: scale(.98); }
+.btn-primary { background: var(--accent); color: #05210f; }
+.btn-block { width: 100%; }
+.btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+.btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--border); }
+.btn-sm { padding: 7px 11px; font-size: 13px; }
+.icon-btn { background: transparent; color: var(--muted); padding: 6px 8px; font-size: 18px; }
+
+.chip {
+  display: inline-block; background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--muted); border-radius: 999px; padding: 3px 10px; font-size: 12px;
+}
+.chip.cat { color: var(--accent); }
+
+.set-line { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.set-line .num { width: 22px; color: var(--muted); font-size: 13px; flex: none; }
+.set-line input { padding: 9px 10px; }
+.set-line select { padding: 9px 10px; }
+
+ul.clean { list-style: none; padding: 0; margin: 0; }
+
+/* 下部ナビ */
+nav.tabbar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+  display: flex; max-width: 680px; margin: 0 auto;
+  background: rgba(24,27,34,.95);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+nav.tabbar button {
+  flex: 1; background: transparent; border: none; color: var(--muted);
+  padding: 9px 0 11px; font-size: 11px; display: flex; flex-direction: column;
+  align-items: center; gap: 3px; border-radius: 0;
+}
+nav.tabbar button .ico { font-size: 20px; }
+nav.tabbar button.active { color: var(--accent); }
+
+/* モーダル */
+.modal-bg {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50;
+  display: none; align-items: flex-end; justify-content: center;
+}
+.modal-bg.open { display: flex; }
+.modal {
+  background: var(--surface); width: 100%; max-width: 680px;
+  border-radius: 18px 18px 0 0; padding: 18px 16px calc(20px + env(safe-area-inset-bottom,0));
+  max-height: 92vh; overflow-y: auto; animation: slideup .25s ease;
+}
+@keyframes slideup { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.modal h3 { margin: 0 0 14px; font-size: 17px; }
+
+canvas { width: 100%; height: auto; display: block; }
+.empty { text-align: center; color: var(--muted); padding: 32px 12px; }
+.toast {
+  position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+  background: var(--accent); color: #05210f; padding: 10px 18px; border-radius: 999px;
+  font-weight: 600; font-size: 14px; z-index: 100; opacity: 0; transition: opacity .25s;
+  pointer-events: none;
+}
+.toast.show { opacity: 1; }
+.divider { height: 1px; background: var(--border); margin: 14px 0; }
+
+#login-overlay {
+  position: fixed; inset: 0; z-index: 200; background: var(--bg);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+#login-overlay .login-box { width: 100%; max-width: 340px; }
+#login-overlay .login-logo { font-size: 56px; text-align: center; margin-bottom: 8px; }
+#login-overlay input { margin-bottom: 0; }

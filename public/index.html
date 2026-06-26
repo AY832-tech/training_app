@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#0f1115" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="筋トレ" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>筋トレ管理</title>
+</head>
+<body>
+  <header>
+    <span class="logo">🏋️</span>
+    <h1 id="header-title">ホーム</h1>
+  </header>
+
+  <main>
+    <section id="view-home" class="view active"></section>
+    <section id="view-log" class="view"></section>
+    <section id="view-meal" class="view"></section>
+    <section id="view-body" class="view"></section>
+    <section id="view-stats" class="view"></section>
+  </main>
+
+  <nav class="tabbar">
+    <button data-view="home" class="active"><span class="ico">🏠</span>ホーム</button>
+    <button data-view="log"><span class="ico">📋</span>トレ記録</button>
+    <button data-view="meal"><span class="ico">🍚</span>食事</button>
+    <button data-view="body"><span class="ico">⚖️</span>体組成</button>
+    <button data-view="stats"><span class="ico">📈</span>統計</button>
+  </nav>
+
+  <div class="modal-bg" id="modal-bg">
+    <div class="modal" id="modal"></div>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script src="/charts.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
