@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "menu-schema.json",
+  "title": "筋トレ管理アプリ メニュー定義",
+  "description": "POST /api/program/import（またはアプリの「メニュー取込」画面）に渡すメニューJSONの形式。インポートすると新しいバージョンとして追加され、既存バージョンは上書きされない。種目は name で照合し、存在しなければ自動作成される。",
+  "type": "object",
+  "required": ["name", "days"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "メニュー名（例: PPL 6週目改訂）"
+    },
+    "note": {
+      "type": "string",
+      "description": "改訂理由などのメモ（バージョンに記録される）"
+    },
+    "start_date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "description": "メソサイクル起点日 YYYY-MM-DD（省略時は取込日）"
+    },
+    "days": {
+      "type": "array",
+      "minItems": 1,
+      "description": "トレーニング日の配列（週の分割）",
+      "items": {
+        "type": "object",
+        "required": ["name", "exercises"],
+        "properties": {
+          "name": { "type": "string", "description": "例: Day1 上半身" },
+          "exercises": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["name", "target_sets", "rep_min", "rep_max"],
+              "properties": {
+                "name": { "type": "string", "description": "種目名（この名前で照合・自動作成）" },
+                "category": { "type": "string", "description": "部位: 胸/背中/脚/肩/腕/腹/その他（新規作成時のみ使用）" },
+                "unit": { "type": "string", "enum": ["kg", "回", "秒"], "description": "単位（既定 kg。新規作成時のみ使用）" },
+                "target_sets": { "type": "integer", "minimum": 1, "description": "目標セット数" },
+                "rep_min": { "type": "integer", "minimum": 1, "description": "目標レップ範囲の下限" },
+                "rep_max": { "type": "integer", "minimum": 1, "description": "目標レップ範囲の上限（全セット到達で増量提案）" },
+                "increment": { "type": "number", "description": "増量提案の刻み kg（既定 2.5。アイソレーションは 1.25 推奨）" },
+                "note": { "type": "string", "description": "任意メモ（例: 各脚、加重可）" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "name": "サンプル: Upper/Lower 週2改訂",
+      "note": "外部相談に基づく v3 改訂",
+      "days": [
+        {
+          "name": "Day1 上半身",
+          "exercises": [
+            { "name": "ベンチプレス", "category": "胸", "target_sets": 4, "rep_min": 6, "rep_max": 10, "increment": 2.5 },
+            { "name": "ラットプルダウン", "category": "背中", "target_sets": 3, "rep_min": 8, "rep_max": 12 },
+            { "name": "サイドレイズ", "category": "肩", "target_sets": 3, "rep_min": 12, "rep_max": 15, "increment": 1.25 }
+          ]
+        },
+        {
+          "name": "Day2 下半身",
+          "exercises": [
+            { "name": "スクワット", "category": "脚", "target_sets": 4, "rep_min": 6, "rep_max": 10 },
+            { "name": "レッグカール", "category": "脚", "target_sets": 3, "rep_min": 10, "rep_max": 15, "increment": 1.25 },
+            { "name": "アブローラー", "category": "腹", "target_sets": 3, "rep_min": 8, "rep_max": 12, "note": "加重は重量欄に kg で記録" }
+          ]
+        }
+      ]
+    }
+  ]
+}

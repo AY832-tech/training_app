@@ -368,6 +368,56 @@ const api = {
     return db.one('SELECT * FROM program_exercises WHERE id = ?', [idn(p.id)]);
   },
 
+  // ===== エクスポート / インポート =====
+  // 全セッション記録（?format=csv で CSV ダウンロード）
+  'GET /api/export/sessions': async (b, p, query) => {
+    const rows = await db.q(`
+      SELECT w.date, w.id AS workout_id, e.name AS exercise, e.unit,
+             ws.set_order, ws.weight, ws.reps, ws.manual_override,
+             pv.version_no, pd.name AS day_name, w.note
+      FROM workout_sets ws
+      JOIN workouts w ON w.id = ws.workout_id
+      JOIN exercises e ON e.id = ws.exercise_id
+      LEFT JOIN program_versions pv ON pv.id = w.version_id
+      LEFT JOIN program_days pd ON pd.id = w.day_id
+      ORDER BY w.date, w.id, ws.set_order, ws.id`);
+    if ((query.format || 'json') === 'csv') {
+      const cols = ['date', 'workout_id', 'exercise', 'unit', 'set_order', 'weight', 'reps',
+        'manual_override', 'version_no', 'day_name', 'note'];
+      const csvEsc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+      const body = rows.map((r) => cols.map((c) => csvEsc(r[c])).join(',')).join('\n');
+      return { __raw: '\uFEFF' + cols.join(',') + '\n' + body, // BOM付き（Excel対応）
+        headers: { 'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="sessions.csv"' } };
+    }
+    return { exported_at: new Date().toISOString(), count: rows.length, sessions: rows };
+  },
+
+  // メニューJSONを新バージョンとして取込（menu-schema.json 参照）
+  'POST /api/program/import': async (b) => {
+    const m = b.menu || b;
+    if (!m || !Array.isArray(m.days) || !m.days.length) throw new Error('days（配列）が必要です');
+    const days = [];
+    for (const d of m.days) {
+      if (!Array.isArray(d.exercises) || !d.exercises.length) throw new Error(`「${d.name || 'Day'}」に exercises が必要です`);
+      const exs = [];
+      for (const ex of d.exercises) {
+        if (!ex.name) throw new Error('各種目に name が必要です');
+        const exid = await db.ensureExercise(String(ex.name).trim(),
+          String(ex.category || 'その他'), String(ex.unit || 'kg'));
+        exs.push({ exercise_id: exid, target_sets: num(ex.target_sets, 3),
+          rep_min: num(ex.rep_min, 8), rep_max: num(ex.rep_max, 12),
+          increment: num(ex.increment, 2.5), note: String(ex.note || '') });
+      }
+      days.push({ name: String(d.name || `Day${days.length + 1}`), exercises: exs });
+    }
+    return api['POST /api/program']({
+      name: String(m.name || 'インポートメニュー'),
+      note: String(m.note || 'JSONインポート'),
+      start_date: m.start_date, days,
+    });
+  },
+
   // ===== ストレッチ =====
   'GET /api/stretches': async () =>
     db.q('SELECT * FROM stretches ORDER BY timing DESC, item_order, id'), // pre → post
@@ -541,7 +591,8 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = req.method === 'GET' || req.method === 'DELETE' ? {} : await readBody(req);
       const result = await route.handler(body, route.params, Object.fromEntries(url.searchParams));
-      send(res, 200, result ?? { ok: true });
+      if (result && result.__raw !== undefined) send(res, 200, result.__raw, result.headers || {});
+      else send(res, 200, result ?? { ok: true });
     } catch (e) {
       console.error(e);
       const msg = /UNIQUE/.test(e.message) ? '同じ名前が既に存在します' : e.message;

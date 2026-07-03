@@ -504,6 +504,10 @@ function renderProgramView(versionId) {
         : `<button class="btn-ghost btn-sm" id="p-activate">この版を現行にする</button>`}
       <button class="btn-ghost btn-sm" id="p-hist">変更履歴</button>
     </div>
+    <div class="row wrap" style="margin-top:8px">
+      <button class="btn-ghost btn-sm" id="p-export">📤 記録をエクスポート</button>
+      <button class="btn-ghost btn-sm" id="p-import">📥 メニュー取込</button>
+    </div>
     <button class="btn-ghost btn-block" id="p-close" style="margin-top:10px">閉じる</button>`);
 
   $('#modal').querySelectorAll('[data-manual]').forEach((inp) => inp.onchange = async () => {
@@ -518,7 +522,68 @@ function renderProgramView(versionId) {
     if (state.view === 'home') renderers.home();
   };
   if ($('#p-hist')) $('#p-hist').onclick = () => programHistoryModal(v.id);
+  $('#p-export').onclick = () => exportModal();
+  $('#p-import').onclick = () => importModal();
   $('#p-close').onclick = closeModal;
+}
+
+// ---------- エクスポート / インポート ----------
+async function downloadFile(url, filename) {
+  const res = await fetch(url, { credentials: 'same-origin' });
+  if (!res.ok) { toast('エクスポートに失敗しました'); return; }
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function exportModal() {
+  const d = todayStr();
+  openModal(`
+    <h3>記録をエクスポート</h3>
+    <p class="muted small">全セッション記録（日付・種目・重量・レップ・メニューバージョン・手動上書きフラグ）を出力します。外部での分析・メニュー改訂の相談に使えます。</p>
+    <button class="btn-primary btn-block" id="exp-json" style="margin-bottom:8px">JSON でダウンロード</button>
+    <button class="btn-primary btn-block" id="exp-csv" style="margin-bottom:14px">CSV でダウンロード（Excel向け）</button>
+    <button class="btn-ghost btn-block" id="exp-back">戻る</button>`);
+  $('#exp-json').onclick = () => downloadFile('/api/export/sessions', `sessions-${d}.json`);
+  $('#exp-csv').onclick = () => downloadFile('/api/export/sessions?format=csv', `sessions-${d}.csv`);
+  $('#exp-back').onclick = () => programModal();
+}
+
+function importModal() {
+  openModal(`
+    <h3>メニューJSONを取込</h3>
+    <p class="muted small">menu-schema.json の形式で作ったメニューを<b>新バージョンとして追加</b>します（既存の版は残ります）。取込後はその版が現行になり、メソサイクルの週数はリセットされます。</p>
+    <div class="field"><label>ファイルを選択</label><input type="file" id="imp-file" accept=".json,application/json"></div>
+    <div class="field"><label>または JSON を貼り付け</label>
+      <textarea id="imp-text" rows="8" placeholder='{"name": "新メニュー", "days": [...]}' style="font-family:monospace;font-size:12px"></textarea></div>
+    <div id="imp-err" class="small" style="color:var(--danger);min-height:18px;margin-bottom:6px"></div>
+    <div class="row">
+      <button class="btn-ghost grow" id="imp-back">戻る</button>
+      <button class="btn-primary grow" id="imp-go">取込む</button>
+    </div>`);
+  $('#imp-file').onchange = (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { $('#imp-text').value = r.result; };
+    r.readAsText(f);
+  };
+  $('#imp-back').onclick = () => programModal();
+  $('#imp-go').onclick = async () => {
+    const raw = $('#imp-text').value.trim();
+    if (!raw) { $('#imp-err').textContent = 'JSONを入力してください'; return; }
+    let menu;
+    try { menu = JSON.parse(raw); } catch (e) { $('#imp-err').textContent = 'JSONの形式が不正です: ' + e.message; return; }
+    try {
+      const v = await post('/api/program/import', { menu });
+      toast(`v${v.version_no} として取込みました`);
+      await programModal();
+      if (state.view === 'home') renderers.home();
+    } catch (e) { $('#imp-err').textContent = e.message; }
+  };
 }
 
 async function programHistoryModal(versionId) {

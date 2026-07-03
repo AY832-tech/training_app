@@ -1,6 +1,6 @@
 'use strict';
 // シンプルなアプリシェルキャッシュ。APIはネットワーク優先。
-const CACHE = 'muscle-app-v4';
+const CACHE = 'muscle-app-v5';
 const SHELL = [
   '/',
   '/index.html',
