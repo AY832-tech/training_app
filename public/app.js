@@ -245,6 +245,7 @@ function exGroupHtml(pe) {
       <b>${esc(pe.exercise_name)}</b>
       <span class="chip">${pe.target_sets}×${pe.rep_min}-${pe.rep_max}</span>
     </div>
+    ${pe.muscles ? `<div class="muscles">🎯 ${esc(pe.muscles)}</div>` : ''}
     <div class="muted small" style="margin:3px 0 6px">前回: ${lastTxt}${
       sug.weight != null ? ` ・ 推奨 <b class="accent">${sug.weight}${esc(pe.unit)}</b>${
         srcLabel ? ` <span class="chip cat">${srcLabel}</span>` : ''}` : ''}</div>
@@ -387,20 +388,36 @@ async function exerciseModal() {
       <div class="field"><label>部位</label><select id="ex-cat">${cats.map((c) => `<option>${c}</option>`).join('')}</select></div>
       <div class="field" style="flex:.7"><label>単位</label><select id="ex-unit"><option>kg</option><option>回</option><option>秒</option></select></div>
     </div>
+    <div class="field"><label>対象筋（任意）</label><input id="ex-muscles" placeholder="例: 大胸筋・上腕三頭筋"></div>
     <button class="btn-primary btn-block btn-sm" id="ex-add" style="margin-bottom:14px">＋ 追加</button>
     <div class="divider"></div>
     <ul class="clean" id="ex-list"></ul>
     <button class="btn-ghost btn-block" id="ex-close" style="margin-top:12px">閉じる</button>`);
   const renderList = () => {
     $('#ex-list').innerHTML = state.exercises.map((e) =>
-      `<li class="row between" style="padding:8px 0;border-bottom:1px solid var(--border)">
-        <span><b>${esc(e.name)}</b> <span class="chip cat">${esc(e.category)}</span></span>
-        <button class="icon-btn" data-del="${e.id}">🗑</button></li>`).join('');
+      `<li style="padding:8px 0;border-bottom:1px solid var(--border)">
+        <div class="row between">
+          <span><b>${esc(e.name)}</b> <span class="chip cat">${esc(e.category)}</span></span>
+          <span style="white-space:nowrap">
+            <button class="icon-btn" data-edit="${e.id}">✏️</button>
+            <button class="icon-btn" data-del="${e.id}">🗑</button>
+          </span>
+        </div>
+        ${e.muscles ? `<div class="muscles">🎯 ${esc(e.muscles)}</div>` : ''}
+      </li>`).join('');
     $('#ex-list').querySelectorAll('[data-del]').forEach((b) =>
       b.onclick = async () => {
         if (!confirm('削除しますか？（過去の記録は残ります）')) return;
         try { await del('/api/exercises/' + b.dataset.del); await loadExercises(); renderList(); toast('削除しました'); }
         catch (e) { toast('使用中の種目は削除できません'); }
+      });
+    $('#ex-list').querySelectorAll('[data-edit]').forEach((b) =>
+      b.onclick = async () => {
+        const ex = state.exercises.find((x) => x.id === Number(b.dataset.edit));
+        const m = prompt(`「${ex.name}」の対象筋を入力`, ex.muscles || '');
+        if (m == null) return;
+        await put('/api/exercises/' + ex.id, { muscles: m });
+        await loadExercises(); renderList(); toast('更新しました');
       });
   };
   renderList();
@@ -408,8 +425,9 @@ async function exerciseModal() {
     const name = $('#ex-name').value.trim();
     if (!name) return toast('種目名を入れてください');
     try {
-      await post('/api/exercises', { name, category: $('#ex-cat').value, unit: $('#ex-unit').value });
-      await loadExercises(); renderList(); $('#ex-name').value = ''; toast('追加しました');
+      await post('/api/exercises', { name, category: $('#ex-cat').value, unit: $('#ex-unit').value,
+        muscles: $('#ex-muscles').value });
+      await loadExercises(); renderList(); $('#ex-name').value = ''; $('#ex-muscles').value = ''; toast('追加しました');
     } catch (e) { toast('同名の種目が既にあります'); }
   };
   $('#ex-close').onclick = closeModal;
@@ -515,7 +533,8 @@ function renderProgramView(versionId) {
         ${d.exercises.map((pe) => `
           <div class="row between" style="padding:7px 0;border-top:1px solid var(--border);align-items:center">
             <div class="grow small"><b>${esc(pe.exercise_name)}</b>
-              <span class="muted"> ${pe.target_sets}×${pe.rep_min}-${pe.rep_max}</span></div>
+              <span class="muted"> ${pe.target_sets}×${pe.rep_min}-${pe.rep_max}</span>
+              ${pe.muscles ? `<div class="muscles">🎯 ${esc(pe.muscles)}</div>` : ''}</div>
             <div class="right small" style="white-space:nowrap">
               <span class="muted" style="font-size:11px">次回手動</span>
               <input type="number" inputmode="decimal" step="0.5" style="width:60px" data-manual="${pe.id}" value="${pe.next_weight_manual ?? ''}" placeholder="自動">

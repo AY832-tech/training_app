@@ -117,7 +117,7 @@ async function buildVersion(v) {
   const days = await db.q('SELECT * FROM program_days WHERE version_id = ? ORDER BY day_order, id', [v.id]);
   for (const d of days) {
     d.exercises = await db.q(
-      `SELECT pe.*, e.name AS exercise_name, e.unit, e.category
+      `SELECT pe.*, e.name AS exercise_name, e.unit, e.category, e.muscles
        FROM program_exercises pe JOIN exercises e ON e.id = pe.exercise_id
        WHERE pe.day_id = ? ORDER BY pe.item_order, pe.id`, [d.id]);
   }
@@ -197,9 +197,17 @@ const api = {
     db.q('SELECT * FROM exercises ORDER BY category, name'),
 
   'POST /api/exercises': async (b) => {
-    const r = await db.run('INSERT INTO exercises (name, category, unit) VALUES (?, ?, ?)',
-      [String(b.name || '').trim(), String(b.category || 'その他'), String(b.unit || 'kg')]);
+    const r = await db.run('INSERT INTO exercises (name, category, unit, muscles) VALUES (?, ?, ?, ?)',
+      [String(b.name || '').trim(), String(b.category || 'その他'), String(b.unit || 'kg'),
+       String(b.muscles || '').trim()]);
     return db.one('SELECT * FROM exercises WHERE id = ?', [idn(r.lastInsertRowid)]);
+  },
+
+  // 種目の対象筋を更新
+  'PUT /api/exercises/:id': async (b, p) => {
+    await db.run('UPDATE exercises SET muscles = COALESCE(?, muscles) WHERE id = ?',
+      [b.muscles == null ? null : String(b.muscles).trim(), idn(p.id)]);
+    return db.one('SELECT * FROM exercises WHERE id = ?', [idn(p.id)]);
   },
 
   'DELETE /api/exercises/:id': async (b, p) => {
@@ -405,6 +413,10 @@ const api = {
         if (!ex.name) throw new Error('各種目に name が必要です');
         const exid = await db.ensureExercise(String(ex.name).trim(),
           String(ex.category || 'その他'), String(ex.unit || 'kg'));
+        if (ex.muscles) {
+          await db.run("UPDATE exercises SET muscles = ? WHERE id = ? AND muscles = ''",
+            [String(ex.muscles).trim(), exid]);
+        }
         exs.push({ exercise_id: exid, target_sets: num(ex.target_sets, 3),
           rep_min: num(ex.rep_min, 8), rep_max: num(ex.rep_max, 12),
           increment: num(ex.increment, 2.5), note: String(ex.note || '') });

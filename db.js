@@ -162,6 +162,7 @@ async function init() {
   await addColumnIfMissing('workouts', 'version_id', 'INTEGER');
   await addColumnIfMissing('workouts', 'day_id', 'INTEGER');
   await addColumnIfMissing('workout_sets', 'manual_override', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing('exercises', 'muscles', "TEXT NOT NULL DEFAULT ''");
 
   // 初期種目シード（既存デプロイ済みなら既に存在＝スキップ）
   const c = Number((await one('SELECT COUNT(*) AS c FROM exercises')).c);
@@ -181,6 +182,43 @@ async function init() {
 
   await seedProgram();
   await seedStretches();
+  await seedMuscles();
+}
+
+// 既知種目に対象筋を投入（未設定のものだけ更新。ユーザーの編集は上書きしない）
+async function seedMuscles() {
+  const map = {
+    'ベンチプレス': '大胸筋・三角筋前部・上腕三頭筋',
+    'ダンベルプレス': '大胸筋・三角筋前部・上腕三頭筋',
+    'インクラインダンベルプレス': '大胸筋上部・三角筋前部',
+    'チェストフライ': '大胸筋',
+    'ディップス': '大胸筋下部・上腕三頭筋',
+    'ラットプルダウン': '広背筋・上腕二頭筋',
+    '懸垂': '広背筋・上腕二頭筋・体幹',
+    'デッドリフト': '脊柱起立筋・ハムストリングス・殿筋・僧帽筋',
+    'ベントオーバーロウ': '広背筋・僧帽筋・上腕二頭筋',
+    'フェイスプル': '三角筋後部・僧帽筋',
+    'スクワット': '大腿四頭筋・殿筋・ハムストリングス',
+    'ルーマニアンデッドリフト': 'ハムストリングス・殿筋・脊柱起立筋',
+    'レッグプレス': '大腿四頭筋・殿筋',
+    'レッグカール': 'ハムストリングス',
+    'ブルガリアンスクワット': '大腿四頭筋・殿筋',
+    'スタンディングカーフレイズ': '腓腹筋（ふくらはぎ）',
+    'シーテッドカーフレイズ': 'ヒラメ筋（ふくらはぎ深部）',
+    'ショルダープレス': '三角筋前部・中部・上腕三頭筋',
+    'サイドレイズ': '三角筋中部',
+    'バーベルカール': '上腕二頭筋',
+    'ダンベルカール': '上腕二頭筋',
+    'トライセプスプレスダウン': '上腕三頭筋',
+    'ケーブルプレスダウン': '上腕三頭筋',
+    'アブローラー': '腹直筋・体幹',
+    'プランク': '体幹・腹直筋',
+    'ケーブルウッドチョップ': '腹斜筋・体幹',
+  };
+  await batch(Object.entries(map).map(([name, m]) => ({
+    sql: "UPDATE exercises SET muscles = ? WHERE name = ? AND muscles = ''",
+    args: [m, name],
+  })));
 }
 
 // 初回のみ: 指示書のストレッチメニューを投入

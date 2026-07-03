@@ -37,6 +37,7 @@
               "properties": {
                 "name": { "type": "string", "description": "種目名（この名前で照合・自動作成）" },
                 "category": { "type": "string", "description": "部位: 胸/背中/脚/肩/腕/腹/その他（新規作成時のみ使用）" },
+                "muscles": { "type": "string", "description": "対象筋（例: 大胸筋・上腕三頭筋。未設定の種目にのみ反映）" },
                 "unit": { "type": "string", "enum": ["kg", "回", "秒"], "description": "単位（既定 kg。新規作成時のみ使用）" },
                 "target_sets": { "type": "integer", "minimum": 1, "description": "目標セット数" },
                 "rep_min": { "type": "integer", "minimum": 1, "description": "目標レップ範囲の下限" },
