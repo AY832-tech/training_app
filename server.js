@@ -434,6 +434,35 @@ const api = {
   'GET /api/stretches': async () =>
     db.q('SELECT * FROM stretches ORDER BY timing DESC, item_order, id'), // pre → post
 
+  'POST /api/stretches': async (b) => {
+    const timing = b.timing === 'pre' ? 'pre' : 'post';
+    const mx = await db.one('SELECT COALESCE(MAX(item_order), -1) m FROM stretches WHERE timing = ?', [timing]);
+    const r = await db.run(
+      'INSERT INTO stretches (name, timing, detail, target, item_order) VALUES (?, ?, ?, ?, ?)',
+      [String(b.name || '').trim(), timing, String(b.detail || '').trim(),
+       String(b.target || '').trim(), Number(mx.m) + 1]);
+    return db.one('SELECT * FROM stretches WHERE id = ?', [idn(r.lastInsertRowid)]);
+  },
+
+  'PUT /api/stretches/:id': async (b, p) => {
+    await db.run(
+      `UPDATE stretches SET name = COALESCE(?, name), timing = COALESCE(?, timing),
+       detail = COALESCE(?, detail), target = COALESCE(?, target) WHERE id = ?`,
+      [b.name == null ? null : String(b.name).trim(),
+       b.timing == null ? null : (b.timing === 'pre' ? 'pre' : 'post'),
+       b.detail == null ? null : String(b.detail).trim(),
+       b.target == null ? null : String(b.target).trim(), idn(p.id)]);
+    return db.one('SELECT * FROM stretches WHERE id = ?', [idn(p.id)]);
+  },
+
+  'DELETE /api/stretches/:id': async (b, p) => {
+    await db.batch([
+      { sql: 'DELETE FROM stretch_logs WHERE stretch_id = ?', args: [p.id] },
+      { sql: 'DELETE FROM stretches WHERE id = ?', args: [p.id] },
+    ]);
+    return { ok: true };
+  },
+
   // 指定日の実施ログ（?date=YYYY-MM-DD）
   'GET /api/stretch-logs': async (b, p, query) =>
     db.q('SELECT * FROM stretch_logs WHERE date = ?', [query.date || '']),

@@ -770,6 +770,7 @@ renderers.stretch = async function () {
           <input type="date" id="st-date" value="${date}"></div>
       </div>
       ${romHint ? `<div class="small" style="color:var(--accent);margin-top:6px">${romHint}</div>` : ''}
+      <button class="btn-ghost btn-sm" id="st-manage" style="margin-top:8px">種目を管理</button>
     </div>
     ${section('pre', '🔥 トレーニング前（動的）', 'トレ日に実施')}
     ${section('post', '🧘 トレ後・休息日（静的）', '各30〜60秒×2セット・週3〜5回')}
@@ -783,6 +784,7 @@ renderers.stretch = async function () {
     </div>`;
 
   $('#st-date').onchange = (e) => { state.stretchDate = e.target.value; renderers.stretch(); };
+  $('#st-manage').onclick = () => stretchManageModal();
 
   const save = async (id) => {
     const done = $(`.st-check[data-st="${id}"]`).checked;
@@ -809,6 +811,98 @@ renderers.stretch = async function () {
     });
   $('#rom-add').onclick = () => romModal();
 };
+
+// ---------- ストレッチ種目の管理 ----------
+async function stretchManageModal() {
+  const stretches = await get('/api/stretches');
+  let editId = null; // 編集中の種目ID（null = 新規追加モード）
+
+  openModal(`
+    <h3>ストレッチ種目の管理</h3>
+    <div class="field"><label>種目名</label><input id="sm-name" placeholder="例: ハムストリングスストレッチ"></div>
+    <div class="field-row">
+      <div class="field"><label>タイミング</label>
+        <select id="sm-timing"><option value="pre">トレ前（動的）</option><option value="post" selected>トレ後・休息日（静的）</option></select></div>
+      <div class="field"><label>回数・秒の目安</label><input id="sm-detail" placeholder="例: 30〜60秒×2"></div>
+    </div>
+    <div class="field"><label>対象部位</label><input id="sm-target" placeholder="例: ハムストリングス"></div>
+    <div class="row" style="margin-bottom:14px">
+      <button class="btn-ghost btn-sm" id="sm-reset" style="display:none">新規に戻る</button>
+      <button class="btn-primary grow btn-sm" id="sm-save">＋ 追加</button>
+    </div>
+    <div class="divider"></div>
+    <div id="sm-list"></div>
+    <button class="btn-ghost btn-block" id="sm-close" style="margin-top:12px">閉じる</button>`);
+
+  const items = () => stretches;
+  const renderList = () => {
+    const sec = (timing, title) => {
+      const list = items().filter((s) => s.timing === timing);
+      return `<div class="muted small" style="margin:10px 0 4px;font-weight:600">${title}</div>` +
+        (list.length ? list.map((s) => `
+          <div class="row between" style="padding:7px 0;border-bottom:1px solid var(--border);align-items:center">
+            <div class="grow small"><b>${esc(s.name)}</b>
+              <div class="muted" style="font-size:11px">${esc(s.detail)}${s.target ? ' ・ ' + esc(s.target) : ''}</div></div>
+            <span style="white-space:nowrap">
+              <button class="icon-btn" data-edit="${s.id}">✏️</button>
+              <button class="icon-btn" data-del="${s.id}">🗑</button>
+            </span>
+          </div>`).join('') : '<div class="muted small">（なし）</div>');
+    };
+    $('#sm-list').innerHTML = sec('pre', '🔥 トレ前（動的）') + sec('post', '🧘 トレ後・休息日（静的）');
+
+    $('#sm-list').querySelectorAll('[data-edit]').forEach((b) =>
+      b.onclick = () => {
+        const s = items().find((x) => x.id === Number(b.dataset.edit));
+        editId = s.id;
+        $('#sm-name').value = s.name;
+        $('#sm-timing').value = s.timing;
+        $('#sm-detail').value = s.detail;
+        $('#sm-target').value = s.target;
+        $('#sm-save').textContent = '更新する';
+        $('#sm-reset').style.display = '';
+        $('#modal').scrollTop = 0;
+      });
+    $('#sm-list').querySelectorAll('[data-del]').forEach((b) =>
+      b.onclick = async () => {
+        const s = items().find((x) => x.id === Number(b.dataset.del));
+        if (!confirm(`「${s.name}」を削除しますか？（過去の実施記録も消えます）`)) return;
+        await del('/api/stretches/' + s.id);
+        stretches.splice(stretches.indexOf(s), 1);
+        toast('削除しました'); renderList();
+      });
+  };
+  renderList();
+
+  const resetForm = () => {
+    editId = null;
+    $('#sm-name').value = ''; $('#sm-detail').value = ''; $('#sm-target').value = '';
+    $('#sm-timing').value = 'post';
+    $('#sm-save').textContent = '＋ 追加';
+    $('#sm-reset').style.display = 'none';
+  };
+  $('#sm-reset').onclick = resetForm;
+  $('#sm-save').onclick = async () => {
+    const payload = {
+      name: $('#sm-name').value.trim(), timing: $('#sm-timing').value,
+      detail: $('#sm-detail').value.trim(), target: $('#sm-target').value.trim(),
+    };
+    if (!payload.name) return toast('種目名を入れてください');
+    try {
+      if (editId) {
+        const updated = await put('/api/stretches/' + editId, payload);
+        const i = stretches.findIndex((x) => x.id === editId);
+        stretches[i] = updated;
+        toast('更新しました');
+      } else {
+        stretches.push(await post('/api/stretches', payload));
+        toast('追加しました');
+      }
+      resetForm(); renderList();
+    } catch (e) { toast(e.message); }
+  };
+  $('#sm-close').onclick = () => { closeModal(); renderers.stretch(); };
+}
 
 function romModal() {
   openModal(`
