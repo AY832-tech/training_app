@@ -75,6 +75,34 @@ async function logout() {
   location.reload();
 }
 
+// ---------- 種目情報ポップアップ（どこからでも開ける別レイヤー） ----------
+function exerciseInfoModal(name) {
+  const ex = state.exercises.find((e) => e.name === name) || {};
+  const q = encodeURIComponent(name + ' やり方 フォーム');
+  const el = document.createElement('div');
+  el.className = 'info-overlay';
+  el.innerHTML = `
+    <div class="info-box">
+      <div class="info-ico">${exIcon(name)}</div>
+      <h3 style="text-align:center;margin:6px 0 2px">${esc(name)}</h3>
+      ${ex.muscles ? `<div class="muscles" style="text-align:center;margin-bottom:10px">🎯 ${esc(ex.muscles)}</div>` : '<div style="height:8px"></div>'}
+      <a class="btn-ghost btn-block btn-sm link-btn" target="_blank" rel="noopener"
+         href="https://www.youtube.com/results?search_query=${q}">▶ YouTubeでフォームを見る</a>
+      <a class="btn-ghost btn-block btn-sm link-btn" target="_blank" rel="noopener"
+         href="https://www.google.com/search?tbm=isch&q=${q}">🖼 写真・画像を検索</a>
+      <button class="btn-primary btn-block btn-sm" data-close style="margin-top:6px">閉じる</button>
+    </div>`;
+  el.addEventListener('click', (e) => {
+    if (e.target === el || e.target.closest('[data-close]')) el.remove();
+  });
+  document.body.appendChild(el);
+}
+// アイコンや種目名（data-exinfo）のタップで情報を開く（全画面共通）
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-exinfo]');
+  if (t) exerciseInfoModal(t.dataset.exinfo);
+});
+
 // ---------- モーダル ----------
 function openModal(html) {
   $('#modal').innerHTML = html;
@@ -242,7 +270,10 @@ function exGroupHtml(pe) {
   const rows = Array.from({ length: pe.target_sets }, () => daySetRow(pe.exercise_id, pe.unit, sug.weight)).join('');
   return `<div class="ex-group" data-exgroup data-ex="${pe.exercise_id}" data-sugw="${sug.weight ?? ''}" data-sugsrc="${sug.source}">
     <div class="row between" style="align-items:center">
-      <b>${esc(pe.exercise_name)}</b>
+      <span class="row" style="gap:8px;align-items:center" data-exinfo="${esc(pe.exercise_name)}">
+        <span class="ex-ico">${exIcon(pe.exercise_name)}</span>
+        <b>${esc(pe.exercise_name)}</b>
+      </span>
       <span class="chip">${pe.target_sets}×${pe.rep_min}-${pe.rep_max}</span>
     </div>
     ${pe.muscles ? `<div class="muscles">🎯 ${esc(pe.muscles)}</div>` : ''}
@@ -397,7 +428,9 @@ async function exerciseModal() {
     $('#ex-list').innerHTML = state.exercises.map((e) =>
       `<li style="padding:8px 0;border-bottom:1px solid var(--border)">
         <div class="row between">
-          <span><b>${esc(e.name)}</b> <span class="chip cat">${esc(e.category)}</span></span>
+          <span class="row" style="gap:8px;align-items:center" data-exinfo="${esc(e.name)}">
+            <span class="ex-ico">${exIcon(e.name)}</span>
+            <b>${esc(e.name)}</b> <span class="chip cat">${esc(e.category)}</span></span>
           <span style="white-space:nowrap">
             <button class="icon-btn" data-edit="${e.id}">✏️</button>
             <button class="icon-btn" data-del="${e.id}">🗑</button>
@@ -532,7 +565,8 @@ function renderProgramView(versionId) {
         <div style="font-weight:600;margin-bottom:2px">${esc(d.name)}</div>
         ${d.exercises.map((pe) => `
           <div class="row between" style="padding:7px 0;border-top:1px solid var(--border);align-items:center">
-            <div class="grow small"><b>${esc(pe.exercise_name)}</b>
+            <span class="ex-ico" data-exinfo="${esc(pe.exercise_name)}">${exIcon(pe.exercise_name)}</span>
+            <div class="grow small" data-exinfo="${esc(pe.exercise_name)}"><b>${esc(pe.exercise_name)}</b>
               <span class="muted"> ${pe.target_sets}×${pe.rep_min}-${pe.rep_max}</span>
               ${pe.muscles ? `<div class="muscles">🎯 ${esc(pe.muscles)}</div>` : ''}</div>
             <div class="right small" style="white-space:nowrap">
