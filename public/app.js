@@ -119,7 +119,20 @@ renderers.home = async function () {
   const s = await get('/api/summary?today=' + todayStr());
   const el = $('#view-home');
   const body = s.latest_body;
+  const m = s.mesocycle;
+  const mesoHtml = m ? `
+    <div class="card ${m.over ? 'meso-over' : m.due ? 'meso-due' : ''}" style="margin-bottom:2px">
+      <div class="row between">
+        <div><div class="muted small">現在のメニュー（v${m.version_no}）</div>
+          <div style="font-weight:600;margin-top:2px">${esc(m.name)}</div></div>
+        <div class="right"><div class="muted small">メソサイクル</div>
+          <div class="big">第${m.week}<span class="unit muted" style="font-size:13px">週 / 8-12</span></div></div>
+      </div>
+      ${m.over ? `<div class="small" style="color:var(--danger);margin-top:6px">⚠️ 12週を超えました。メニューの抜本見直しを推奨します。</div>`
+        : m.due ? `<div class="small" style="color:var(--accent);margin-top:6px">💡 8週を超えました。そろそろメニュー改訂を検討しましょう。</div>` : ''}
+    </div>` : '';
   el.innerHTML = `
+    ${mesoHtml}
     <div class="stats-grid">
       <div class="stat"><div class="label">今週のトレ回数</div><div class="val">${s.workouts_this_week}<span class="unit"> 回</span></div></div>
       <div class="stat"><div class="label">今週の総挙上量</div><div class="val">${round(s.total_volume_this_week / 1000, 1)}<span class="unit"> t</span></div></div>
@@ -163,11 +176,13 @@ renderers.log = async function () {
       <button class="btn-primary grow" id="add-workout">＋ 新しいトレ記録</button>
     </div>
     <div class="row wrap" style="margin-bottom:14px">
+      <button class="btn-ghost btn-sm" id="manage-menu">📋 メニュー</button>
       <button class="btn-ghost btn-sm" id="manage-ex">種目を管理</button>
       <button class="btn-ghost btn-sm" id="manage-tpl">テンプレート</button>
     </div>
     <div id="workout-list"></div>`;
   $('#add-workout').onclick = () => workoutModal();
+  $('#manage-menu').onclick = () => programModal();
   $('#manage-ex').onclick = () => exerciseModal();
   $('#manage-tpl').onclick = () => templateListModal();
 
@@ -193,6 +208,7 @@ renderers.log = async function () {
     c.onclick = () => { const w = workouts.find((x) => x.id === Number(c.dataset.id)); workoutModal(w); });
 };
 
+// 自由入力モードの1行（種目ドロップダウン付き）
 function setLineHtml(set = {}) {
   return `<div class="set-line" data-set>
     <span class="num">●</span>
@@ -203,24 +219,53 @@ function setLineHtml(set = {}) {
   </div>`;
 }
 
+// Day モードの1行（種目は固定）
+function daySetRow(exId, unit, w) {
+  return `<div class="set-line" data-set data-ex="${exId}">
+    <span class="num">●</span>
+    <input type="number" inputmode="decimal" step="0.5" placeholder="重量" style="width:76px" data-w value="${w ?? ''}">
+    <span class="muted small" style="min-width:18px">${esc(unit || 'kg')}</span>
+    <input type="number" inputmode="numeric" placeholder="回" style="width:56px" data-r value="">
+    <button class="icon-btn" data-rm type="button">✕</button>
+  </div>`;
+}
+
+// Day モードの種目グループ（前回値・推奨重量つき）
+function exGroupHtml(pe) {
+  const sug = pe.suggestion || { weight: null, source: 'none' };
+  const last = pe.last_session;
+  const lastTxt = last && last.sets.length
+    ? last.sets.map((s) => `${round(s.weight)}×${s.reps}`).join(' / ') : 'なし';
+  const srcLabel = { progress: '↑漸進', last: '前回維持', manual: '手動指定', none: '' }[sug.source] || '';
+  const rows = Array.from({ length: pe.target_sets }, () => daySetRow(pe.exercise_id, pe.unit, sug.weight)).join('');
+  return `<div class="ex-group" data-exgroup data-ex="${pe.exercise_id}" data-sugw="${sug.weight ?? ''}" data-sugsrc="${sug.source}">
+    <div class="row between" style="align-items:center">
+      <b>${esc(pe.exercise_name)}</b>
+      <span class="chip">${pe.target_sets}×${pe.rep_min}-${pe.rep_max}</span>
+    </div>
+    <div class="muted small" style="margin:3px 0 6px">前回: ${lastTxt}${
+      sug.weight != null ? ` ・ 推奨 <b class="accent">${sug.weight}${esc(pe.unit)}</b>${
+        srcLabel ? ` <span class="chip cat">${srcLabel}</span>` : ''}` : ''}</div>
+    <div class="set-rows">${rows}</div>
+    <button class="btn-ghost btn-sm" data-addrow type="button" style="margin-top:4px">＋ セット</button>
+  </div>`;
+}
+
 async function workoutModal(existing) {
   const isEdit = !!existing;
-  const sets = isEdit ? existing.sets : [{}];
-  let tplOptions = '';
-  try {
-    const tpls = await get('/api/templates');
-    if (tpls.length) tplOptions = `<div class="field"><label>テンプレートから読み込み</label>
-      <select id="tpl-pick"><option value="">— 選択 —</option>${
-        tpls.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>`;
-    window._tpls = tpls;
-  } catch (e) {}
+  let prog = null;
+  if (!isEdit) { try { prog = await get('/api/program/active'); } catch (e) {} }
+
+  const dayOptions = prog && prog.days
+    ? prog.days.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join('') : '';
 
   openModal(`
-    <h3>${isEdit ? 'トレ記録を編集' : 'トレ記録'}</h3>
+    <h3>${isEdit ? 'トレ記録を編集' : 'トレを記録'}</h3>
     <div class="field"><label>日付</label><input type="date" id="w-date" value="${existing?.date || todayStr()}"></div>
-    ${isEdit ? '' : tplOptions}
+    ${isEdit ? '' : (dayOptions ? `<div class="field"><label>メニューの日を選ぶ</label>
+      <select id="day-pick"><option value="">自由入力</option>${dayOptions}</select></div>` : '')}
     <label>種目・セット</label>
-    <div id="sets">${sets.map(setLineHtml).join('')}</div>
+    <div id="sets">${(isEdit ? existing.sets : [{}]).map(setLineHtml).join('')}</div>
     <button class="btn-ghost btn-block btn-sm" id="add-set" type="button" style="margin-bottom:12px">＋ セット追加</button>
     <div class="field"><label>メモ</label><textarea id="w-note" rows="2" placeholder="調子・気づきなど">${esc(existing?.note || '')}</textarea></div>
     <div class="row">
@@ -230,35 +275,68 @@ async function workoutModal(existing) {
     </div>`);
 
   const setsEl = $('#sets');
-  const bind = () => setsEl.querySelectorAll('[data-rm]').forEach((b) =>
-    b.onclick = () => { if (setsEl.children.length > 1) b.closest('[data-set]').remove(); });
-  bind();
+  let mode = 'free';
+  let dayId = existing?.day_id || null;
+
+  const bindRemovers = () => setsEl.querySelectorAll('[data-rm]').forEach((b) =>
+    b.onclick = () => {
+      const line = b.closest('[data-set]');
+      const container = line.parentElement;
+      if (container.querySelectorAll('[data-set]').length > 1) line.remove();
+    });
+  const bindAddRows = () => setsEl.querySelectorAll('[data-addrow]').forEach((b) =>
+    b.onclick = () => {
+      const grp = b.closest('[data-exgroup]');
+      $('.set-rows', grp).insertAdjacentHTML('beforeend', daySetRow(grp.dataset.ex, '', grp.dataset.sugw || ''));
+      bindRemovers();
+    });
+  bindRemovers();
+
   $('#add-set').onclick = () => {
-    // 直前のセットの種目を引き継ぐ
-    const last = setsEl.lastElementChild;
-    const exId = last ? $('[data-ex]', last).value : undefined;
+    const last = setsEl.querySelector('.set-line:last-child');
+    const exId = last && $('[data-ex]', last) && $('[data-ex]', last).tagName === 'SELECT'
+      ? $('[data-ex]', last).value : undefined;
     setsEl.insertAdjacentHTML('beforeend', setLineHtml({ exercise_id: exId }));
-    bind();
+    bindRemovers();
   };
-  if ($('#tpl-pick')) $('#tpl-pick').onchange = (e) => {
-    const t = (window._tpls || []).find((x) => x.id === Number(e.target.value));
-    if (!t) return;
-    setsEl.innerHTML = t.items.flatMap((it) =>
-      Array.from({ length: it.target_sets }, () => setLineHtml({ exercise_id: it.exercise_id, reps: it.target_reps }))
-    ).join('') || setLineHtml();
-    bind();
+
+  if ($('#day-pick')) $('#day-pick').onchange = (e) => {
+    const d = (prog.days || []).find((x) => x.id === Number(e.target.value));
+    if (!d) {
+      mode = 'free'; dayId = null;
+      setsEl.innerHTML = setLineHtml();
+      $('#add-set').style.display = '';
+      bindRemovers();
+      return;
+    }
+    mode = 'day'; dayId = d.id;
+    setsEl.innerHTML = d.exercises.map(exGroupHtml).join('') || setLineHtml();
+    $('#add-set').style.display = 'none';
+    bindRemovers(); bindAddRows();
   };
 
   $('#w-cancel').onclick = closeModal;
   $('#w-save').onclick = async () => {
+    const sets = [...setsEl.querySelectorAll('[data-set]')].map((r) => {
+      const w = $('[data-w]', r).value;
+      const reps = $('[data-r]', r).value;
+      const exId = Number(r.dataset.ex || ($('[data-ex]', r) ? $('[data-ex]', r).value : 0));
+      let manual = false;
+      const grp = r.closest('[data-exgroup]');
+      if (grp) {
+        const sugw = grp.dataset.sugw, src = grp.dataset.sugsrc;
+        if (src === 'manual') manual = true;
+        else if (sugw !== '' && w !== '' && Number(w) !== Number(sugw)) manual = true;
+      }
+      return { exercise_id: exId, weight: w, reps, manual_override: manual };
+    }).filter((s) => s.exercise_id && (s.reps !== '' || s.weight !== ''));
+
     const payload = {
       date: $('#w-date').value,
       note: $('#w-note').value,
-      sets: [...setsEl.querySelectorAll('[data-set]')].map((r) => ({
-        exercise_id: Number($('[data-ex]', r).value),
-        weight: $('[data-w]', r).value,
-        reps: $('[data-r]', r).value,
-      })).filter((s) => s.exercise_id && (s.reps !== '' || s.weight !== '')),
+      version_id: (mode === 'day' && prog) ? prog.id : (existing?.version_id || null),
+      day_id: (mode === 'day') ? dayId : (existing?.day_id || null),
+      sets,
     };
     if (!payload.date) return toast('日付を入れてください');
     if (!payload.sets.length) return toast('セットを入力してください');
@@ -372,6 +450,163 @@ function templateEditModal() {
     })).filter((i) => i.exercise_id);
     await post('/api/templates', { name, items });
     toast('保存しました'); templateListModal();
+  };
+}
+
+// ==================================================
+// メニュー（プログラム）管理
+// ==================================================
+async function programModal() {
+  await loadExercises();
+  const versions = await get('/api/program');
+  window._progVersions = versions;
+  if (!versions.length) {
+    openModal(`<h3>メニュー</h3><div class="empty">メニューがありません</div>
+      <button class="btn-ghost btn-block" id="p-close">閉じる</button>`);
+    $('#p-close').onclick = closeModal; return;
+  }
+  const active = versions.find((v) => v.is_active) || versions[0];
+  renderProgramView(active.id);
+}
+
+function renderProgramView(versionId) {
+  const versions = window._progVersions || [];
+  const v = versions.find((x) => x.id === versionId) || versions[0];
+  const verSwitch = versions.length > 1
+    ? `<div class="field"><label>バージョン切替</label><select id="ver-pick">${
+        versions.map((x) => `<option value="${x.id}" ${x.id === v.id ? 'selected' : ''}>v${x.version_no} ${esc(x.name)}${x.is_active ? '（現行）' : ''}</option>`).join('')}</select></div>`
+    : '';
+  openModal(`
+    <h3>メニュー v${v.version_no}</h3>
+    ${verSwitch}
+    <div class="card">
+      <div style="font-weight:600">${esc(v.name)}</div>
+      <div class="muted small" style="margin-top:2px">開始 ${v.start_date || '—'}${v.is_active ? ' ・ 現行（アクティブ）' : ' ・ 過去版'}</div>
+      ${v.note ? `<div class="muted small">📝 ${esc(v.note)}</div>` : ''}
+    </div>
+    ${v.days.map((d) => `
+      <div class="card">
+        <div style="font-weight:600;margin-bottom:2px">${esc(d.name)}</div>
+        ${d.exercises.map((pe) => `
+          <div class="row between" style="padding:7px 0;border-top:1px solid var(--border);align-items:center">
+            <div class="grow small"><b>${esc(pe.exercise_name)}</b>
+              <span class="muted"> ${pe.target_sets}×${pe.rep_min}-${pe.rep_max}</span></div>
+            <div class="right small" style="white-space:nowrap">
+              <span class="muted" style="font-size:11px">次回手動</span>
+              <input type="number" inputmode="decimal" step="0.5" style="width:60px" data-manual="${pe.id}" value="${pe.next_weight_manual ?? ''}" placeholder="自動">
+            </div>
+          </div>`).join('')}
+      </div>`).join('')}
+    <div class="row wrap" style="margin-top:8px">
+      ${v.is_active
+        ? `<button class="btn-ghost btn-sm" id="p-edit">✏️ 編集（軽微）</button>
+           <button class="btn-ghost btn-sm" id="p-new">🔄 新バージョン</button>`
+        : `<button class="btn-ghost btn-sm" id="p-activate">この版を現行にする</button>`}
+      <button class="btn-ghost btn-sm" id="p-hist">変更履歴</button>
+    </div>
+    <button class="btn-ghost btn-block" id="p-close" style="margin-top:10px">閉じる</button>`);
+
+  $('#modal').querySelectorAll('[data-manual]').forEach((inp) => inp.onchange = async () => {
+    try { await put('/api/program-exercise/' + inp.dataset.manual, { next_weight_manual: inp.value }); toast('次回重量を更新'); }
+    catch (e) { toast('更新に失敗しました'); }
+  });
+  if ($('#ver-pick')) $('#ver-pick').onchange = (e) => renderProgramView(Number(e.target.value));
+  if ($('#p-edit')) $('#p-edit').onclick = () => programEditModal(v, 'minor');
+  if ($('#p-new')) $('#p-new').onclick = () => programEditModal(v, 'major');
+  if ($('#p-activate')) $('#p-activate').onclick = async () => {
+    await post('/api/program/' + v.id + '/activate', {}); toast('現行にしました'); programModal();
+    if (state.view === 'home') renderers.home();
+  };
+  if ($('#p-hist')) $('#p-hist').onclick = () => programHistoryModal(v.id);
+  $('#p-close').onclick = closeModal;
+}
+
+async function programHistoryModal(versionId) {
+  const rows = await get('/api/program/' + versionId + '/changes');
+  openModal(`<h3>変更履歴</h3>
+    ${rows.length ? rows.map((r) => `<div class="card"><b>${fmtDate(r.date)}</b><div class="small">${esc(r.description)}</div></div>`).join('')
+      : '<div class="empty">履歴はありません</div>'}
+    <button class="btn-ghost btn-block" id="h-close" style="margin-top:8px">戻る</button>`);
+  $('#h-close').onclick = () => programModal();
+}
+
+function progExRow(it = {}) {
+  return `<div class="set-line" data-pit data-inc="${it.increment ?? 2.5}">
+    <select class="grow" data-ex>${exerciseOptions(it.exercise_id)}</select>
+    <input type="number" inputmode="numeric" style="width:40px" data-sets placeholder="ｾｯﾄ" value="${it.target_sets ?? 3}">
+    <input type="number" inputmode="numeric" style="width:40px" data-rmin placeholder="min" value="${it.rep_min ?? 8}">
+    <span class="muted small">-</span>
+    <input type="number" inputmode="numeric" style="width:40px" data-rmax placeholder="max" value="${it.rep_max ?? 12}">
+    <button class="icon-btn" data-rm type="button">✕</button>
+  </div>`;
+}
+
+function progDayHtml(d = {}) {
+  return `<div class="card" data-pday>
+    <div class="row between" style="margin-bottom:6px">
+      <input class="grow" data-dayname placeholder="Day名（例: Day1 上半身）" value="${esc(d.name || '')}" style="font-weight:600">
+      <button class="icon-btn" data-rmday type="button">🗑</button>
+    </div>
+    <div data-pitems>${(d.exercises && d.exercises.length ? d.exercises : [{}]).map(progExRow).join('')}</div>
+    <button class="btn-ghost btn-sm" data-additem type="button" style="margin-top:4px">＋ 種目</button>
+  </div>`;
+}
+
+function programEditModal(v, mode) {
+  const isMajor = mode === 'major';
+  openModal(`
+    <h3>${isMajor ? '新バージョン作成' : 'メニューを編集'}</h3>
+    <div class="field"><label>メニュー名</label>
+      <input id="pe-name" value="${esc(isMajor ? '' : v.name)}" placeholder="例: PPL 上級"></div>
+    <label>トレーニング日</label>
+    <div id="pe-days">${v.days.map(progDayHtml).join('')}</div>
+    <button class="btn-ghost btn-block btn-sm" id="pe-addday" type="button" style="margin:6px 0 12px">＋ 日を追加</button>
+    <div class="field"><label>${isMajor ? '改訂メモ（新バージョンの理由）' : '変更メモ（履歴に残ります）'}</label>
+      <input id="pe-note" placeholder="${isMajor ? '例: 分割をPPLに変更' : '例: サイドレイズを追加'}"></div>
+    ${isMajor
+      ? `<div class="muted small" style="margin-bottom:10px">⚠️ 新バージョンはメソサイクルの週数がリセットされます。現行版は過去版として残ります。</div>`
+      : `<div class="muted small" style="margin-bottom:10px">軽微編集：同じバージョン内を更新し、メソサイクルの週数は継続します。</div>`}
+    <div class="row">
+      <button class="btn-ghost grow" id="pe-cancel">戻る</button>
+      <button class="btn-primary grow" id="pe-save">${isMajor ? '新バージョンを作成' : '保存'}</button>
+    </div>`);
+
+  const daysEl = $('#pe-days');
+  const bindItem = () => daysEl.querySelectorAll('[data-rm]').forEach((b) => b.onclick = () => {
+    const items = b.closest('[data-pitems]');
+    if (items.querySelectorAll('[data-pit]').length > 1) b.closest('[data-pit]').remove();
+  });
+  const bindDay = () => {
+    daysEl.querySelectorAll('[data-additem]').forEach((b) => b.onclick = () => {
+      $('[data-pitems]', b.closest('[data-pday]')).insertAdjacentHTML('beforeend', progExRow());
+      bindItem();
+    });
+    daysEl.querySelectorAll('[data-rmday]').forEach((b) => b.onclick = () => {
+      if (daysEl.querySelectorAll('[data-pday]').length > 1) b.closest('[data-pday]').remove();
+    });
+  };
+  bindDay(); bindItem();
+  $('#pe-addday').onclick = () => { daysEl.insertAdjacentHTML('beforeend', progDayHtml({})); bindDay(); bindItem(); };
+  $('#pe-cancel').onclick = () => programModal();
+  $('#pe-save').onclick = async () => {
+    const days = [...daysEl.querySelectorAll('[data-pday]')].map((dEl) => ({
+      name: $('[data-dayname]', dEl).value.trim() || 'Day',
+      exercises: [...dEl.querySelectorAll('[data-pit]')].map((r) => ({
+        exercise_id: Number($('[data-ex]', r).value),
+        target_sets: $('[data-sets]', r).value,
+        rep_min: $('[data-rmin]', r).value,
+        rep_max: $('[data-rmax]', r).value,
+        increment: r.dataset.inc || 2.5,
+      })).filter((x) => x.exercise_id),
+    })).filter((d) => d.exercises.length);
+    if (!days.length) return toast('種目を入れてください');
+    const name = $('#pe-name').value.trim() || (isMajor ? '新メニュー' : v.name);
+    const note = $('#pe-note').value.trim();
+    if (isMajor) await post('/api/program', { name, note, days, copy_from_version_id: v.id });
+    else await put('/api/program/' + v.id, { name, days, change_description: note || '編集' });
+    toast('保存しました');
+    await programModal();
+    if (state.view === 'home') renderers.home();
   };
 }
 

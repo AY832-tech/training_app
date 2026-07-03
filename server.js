@@ -58,6 +58,8 @@ function readBody(req) {
 
 const num = (v, d = 0) => (v === '' || v == null || isNaN(Number(v)) ? d : Number(v));
 const idn = (v) => Number(v); // BigInt -> Number
+const round2 = (n) => Math.round(n * 100) / 100;
+const todayLocal = () => new Date().toLocaleDateString('sv-SE');
 
 // セットを各ワークアウトに付与
 async function attachSets(workouts) {
@@ -68,6 +70,125 @@ async function attachSets(workouts) {
       WHERE ws.workout_id = ? ORDER BY ws.set_order, ws.id`, [w.id]);
   }
   return workouts;
+}
+
+// ===== プログラム（メニュー）関連ヘルパ =====
+
+// 起点日からの経過週（1始まり）
+function weeksSince(start, today) {
+  if (!start) return null;
+  const ms = new Date(today + 'T00:00:00Z') - new Date(start + 'T00:00:00Z');
+  return Math.floor(ms / (7 * 864e5)) + 1;
+}
+
+// ある種目の「直近セッション」の実施セット（重量・レップ）
+async function lastSessionSets(exerciseId) {
+  const w = await db.one(
+    `SELECT w.id, w.date FROM workouts w
+     JOIN workout_sets ws ON ws.workout_id = w.id
+     WHERE ws.exercise_id = ?
+     ORDER BY w.date DESC, w.id DESC LIMIT 1`, [exerciseId]);
+  if (!w) return null;
+  const sets = await db.q(
+    `SELECT weight, reps FROM workout_sets
+     WHERE workout_id = ? AND exercise_id = ? ORDER BY set_order, id`,
+    [idn(w.id), exerciseId]);
+  return { date: w.date, sets };
+}
+
+// 次回重量の提案（手動 > 自動漸進 > 前回維持 > なし）
+function suggest(pex, last) {
+  if (pex.next_weight_manual != null) {
+    return { weight: round2(pex.next_weight_manual), source: 'manual' };
+  }
+  if (!last || !last.sets.length) return { weight: null, source: 'none' };
+  const lastWeight = Math.max(...last.sets.map((s) => Number(s.weight)));
+  const metReps = last.sets.every((s) => Number(s.reps) >= pex.rep_max);
+  const enoughSets = last.sets.length >= pex.target_sets;
+  if (metReps && enoughSets) {
+    return { weight: round2(lastWeight + pex.increment), source: 'progress' };
+  }
+  return { weight: lastWeight, source: 'last' };
+}
+
+// バージョンの days/exercises を読み込んで v に付与
+async function buildVersion(v) {
+  if (!v) return null;
+  const days = await db.q('SELECT * FROM program_days WHERE version_id = ? ORDER BY day_order, id', [v.id]);
+  for (const d of days) {
+    d.exercises = await db.q(
+      `SELECT pe.*, e.name AS exercise_name, e.unit, e.category
+       FROM program_exercises pe JOIN exercises e ON e.id = pe.exercise_id
+       WHERE pe.day_id = ? ORDER BY pe.item_order, pe.id`, [d.id]);
+  }
+  v.days = days;
+  return v;
+}
+
+// アクティブなプログラム（各種目に提案・前回値を付与）
+async function buildActiveProgram() {
+  const v = await db.one('SELECT * FROM program_versions WHERE is_active = 1 ORDER BY version_no DESC LIMIT 1');
+  if (!v) return null;
+  await buildVersion(v);
+  for (const d of v.days) {
+    for (const pe of d.exercises) {
+      const last = await lastSessionSets(pe.exercise_id);
+      pe.last_session = last;
+      pe.suggestion = suggest(pex(pe), last);
+    }
+  }
+  return v;
+}
+const pex = (r) => ({
+  target_sets: Number(r.target_sets), rep_max: Number(r.rep_max),
+  increment: Number(r.increment),
+  next_weight_manual: r.next_weight_manual == null ? null : Number(r.next_weight_manual),
+});
+
+// days 構造を挿入（days=[{name, exercises:[{exercise_id,target_sets,rep_min,rep_max,increment,next_weight_manual,note}]}]）
+async function insertDays(vid, days) {
+  for (let di = 0; di < days.length; di++) {
+    const d = await db.run('INSERT INTO program_days (version_id, day_order, name) VALUES (?, ?, ?)',
+      [vid, di, String(days[di].name || `Day${di + 1}`)]);
+    const did = idn(d.lastInsertRowid);
+    const items = days[di].exercises || [];
+    for (let ii = 0; ii < items.length; ii++) {
+      const it = items[ii];
+      await db.run(
+        `INSERT INTO program_exercises
+         (day_id, exercise_id, item_order, target_sets, rep_min, rep_max, increment, next_weight_manual, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [did, Number(it.exercise_id), ii, num(it.target_sets, 3), num(it.rep_min, 8),
+         num(it.rep_max, 12), num(it.increment, 2.5),
+         it.next_weight_manual === '' || it.next_weight_manual == null ? null : num(it.next_weight_manual),
+         String(it.note || '')]);
+    }
+  }
+}
+
+// コピー元の days をプレーン構造で取得
+async function loadDaysStruct(vid) {
+  const days = await db.q('SELECT * FROM program_days WHERE version_id = ? ORDER BY day_order, id', [vid]);
+  const out = [];
+  for (const d of days) {
+    const exs = await db.q('SELECT * FROM program_exercises WHERE day_id = ? ORDER BY item_order, id', [d.id]);
+    out.push({ name: d.name, exercises: exs });
+  }
+  return out;
+}
+
+// セッションで使用した種目の手動次回重量をクリア
+async function clearUsedManual(versionId, sets) {
+  if (!versionId) return;
+  const exIds = [...new Set((sets || []).map((s) => Number(s.exercise_id)).filter(Boolean))];
+  if (!exIds.length) return;
+  const ph = exIds.map(() => '?').join(',');
+  await db.run(
+    `UPDATE program_exercises SET next_weight_manual = NULL
+     WHERE next_weight_manual IS NOT NULL
+       AND exercise_id IN (${ph})
+       AND day_id IN (SELECT id FROM program_days WHERE version_id = ?)`,
+    [...exIds, versionId]);
 }
 
 // ---- API ハンドラ（すべて async）----
@@ -94,13 +215,15 @@ const api = {
   },
 
   'POST /api/workouts': async (b) => {
-    const r = await db.run('INSERT INTO workouts (date, note) VALUES (?, ?)', [b.date, String(b.note || '')]);
+    const r = await db.run('INSERT INTO workouts (date, note, version_id, day_id) VALUES (?, ?, ?, ?)',
+      [b.date, String(b.note || ''), b.version_id || null, b.day_id || null]);
     const wid = idn(r.lastInsertRowid);
     if ((b.sets || []).length) {
       await db.batch(b.sets.map((s, i) => ({
-        sql: 'INSERT INTO workout_sets (workout_id, exercise_id, set_order, weight, reps) VALUES (?, ?, ?, ?, ?)',
-        args: [wid, s.exercise_id, i, num(s.weight), num(s.reps)],
+        sql: 'INSERT INTO workout_sets (workout_id, exercise_id, set_order, weight, reps, manual_override) VALUES (?, ?, ?, ?, ?, ?)',
+        args: [wid, s.exercise_id, i, num(s.weight), num(s.reps), s.manual_override ? 1 : 0],
       })));
+      await clearUsedManual(b.version_id, b.sets);
     }
     return (await attachSets(await db.q('SELECT * FROM workouts WHERE id = ?', [wid])))[0];
   },
@@ -108,11 +231,12 @@ const api = {
   'PUT /api/workouts/:id': async (b, p) => {
     const id = idn(p.id);
     const stmts = [
-      { sql: 'UPDATE workouts SET date = ?, note = ? WHERE id = ?', args: [b.date, String(b.note || ''), id] },
+      { sql: 'UPDATE workouts SET date = ?, note = ?, version_id = ?, day_id = ? WHERE id = ?',
+        args: [b.date, String(b.note || ''), b.version_id || null, b.day_id || null, id] },
       { sql: 'DELETE FROM workout_sets WHERE workout_id = ?', args: [id] },
       ...(b.sets || []).map((s, i) => ({
-        sql: 'INSERT INTO workout_sets (workout_id, exercise_id, set_order, weight, reps) VALUES (?, ?, ?, ?, ?)',
-        args: [id, s.exercise_id, i, num(s.weight), num(s.reps)],
+        sql: 'INSERT INTO workout_sets (workout_id, exercise_id, set_order, weight, reps, manual_override) VALUES (?, ?, ?, ?, ?, ?)',
+        args: [id, s.exercise_id, i, num(s.weight), num(s.reps), s.manual_override ? 1 : 0],
       })),
     ];
     await db.batch(stmts);
@@ -156,6 +280,92 @@ const api = {
       { sql: 'DELETE FROM templates WHERE id = ?', args: [p.id] },
     ]);
     return { ok: true };
+  },
+
+  // ===== プログラム（メニュー）版管理 =====
+  'GET /api/program': async () => {
+    const vs = await db.q('SELECT * FROM program_versions ORDER BY version_no DESC');
+    for (const v of vs) await buildVersion(v);
+    return vs;
+  },
+
+  'GET /api/program/active': async () => buildActiveProgram(),
+
+  'POST /api/program': async (b) => {
+    // 新バージョン（抜本改訂）: 既存を非アクティブ化し、メソサイクル起点をリセット
+    const maxNo = Number((await db.one('SELECT COALESCE(MAX(version_no), 0) n FROM program_versions')).n);
+    const start = b.start_date || todayLocal();
+    await db.run('UPDATE program_versions SET is_active = 0');
+    const r = await db.run(
+      `INSERT INTO program_versions (version_no, name, start_date, note, is_active, parent_version_id)
+       VALUES (?, ?, ?, ?, 1, ?)`,
+      [maxNo + 1, String(b.name || `v${maxNo + 1}`), start, String(b.note || ''), b.copy_from_version_id || null]);
+    const vid = idn(r.lastInsertRowid);
+    let days = b.days;
+    if ((!days || !days.length) && b.copy_from_version_id) days = await loadDaysStruct(b.copy_from_version_id);
+    await insertDays(vid, days || []);
+    return buildVersion(await db.one('SELECT * FROM program_versions WHERE id = ?', [vid]));
+  },
+
+  'PUT /api/program/:id': async (b, p) => {
+    // 軽微編集: アクティブ版内を書き換え（start_date=メソサイクル起点は維持）
+    const vid = idn(p.id);
+    const prevManual = await db.q(
+      `SELECT pe.exercise_id, pe.next_weight_manual FROM program_exercises pe
+       JOIN program_days d ON d.id = pe.day_id
+       WHERE d.version_id = ? AND pe.next_weight_manual IS NOT NULL`, [vid]);
+    const manualMap = {};
+    prevManual.forEach((r) => { manualMap[Number(r.exercise_id)] = r.next_weight_manual; });
+
+    if (b.name != null || b.note != null) {
+      await db.run('UPDATE program_versions SET name = COALESCE(?, name), note = COALESCE(?, note) WHERE id = ?',
+        [b.name ?? null, b.note ?? null, vid]);
+    }
+    if (b.days) {
+      const oldDays = await db.q('SELECT id FROM program_days WHERE version_id = ?', [vid]);
+      const stmts = oldDays.map((d) => ({ sql: 'DELETE FROM program_exercises WHERE day_id = ?', args: [d.id] }));
+      stmts.push({ sql: 'DELETE FROM program_days WHERE version_id = ?', args: [vid] });
+      if (stmts.length) await db.batch(stmts);
+      await insertDays(vid, b.days);
+      for (const [exid, w] of Object.entries(manualMap)) {
+        await db.run(
+          `UPDATE program_exercises SET next_weight_manual = ?
+           WHERE exercise_id = ? AND day_id IN (SELECT id FROM program_days WHERE version_id = ?)`,
+          [w, Number(exid), vid]);
+      }
+    }
+    await db.run('INSERT INTO version_changes (version_id, date, description) VALUES (?, ?, ?)',
+      [vid, b.change_date || todayLocal(), String(b.change_description || '編集')]);
+    return buildVersion(await db.one('SELECT * FROM program_versions WHERE id = ?', [vid]));
+  },
+
+  'POST /api/program/:id/activate': async (b, p) => {
+    await db.batch([
+      { sql: 'UPDATE program_versions SET is_active = 0', args: [] },
+      { sql: 'UPDATE program_versions SET is_active = 1 WHERE id = ?', args: [idn(p.id)] },
+    ]);
+    return { ok: true };
+  },
+
+  'DELETE /api/program/:id': async (b, p) => {
+    const vid = idn(p.id);
+    const days = await db.q('SELECT id FROM program_days WHERE version_id = ?', [vid]);
+    const stmts = days.map((d) => ({ sql: 'DELETE FROM program_exercises WHERE day_id = ?', args: [d.id] }));
+    stmts.push({ sql: 'DELETE FROM program_days WHERE version_id = ?', args: [vid] });
+    stmts.push({ sql: 'DELETE FROM version_changes WHERE version_id = ?', args: [vid] });
+    stmts.push({ sql: 'DELETE FROM program_versions WHERE id = ?', args: [vid] });
+    await db.batch(stmts);
+    return { ok: true };
+  },
+
+  'GET /api/program/:id/changes': async (b, p) =>
+    db.q('SELECT * FROM version_changes WHERE version_id = ? ORDER BY date DESC, id DESC', [p.id]),
+
+  // 種目ごとの「次回目標重量」手動上書き
+  'PUT /api/program-exercise/:id': async (b, p) => {
+    const w = b.next_weight_manual === '' || b.next_weight_manual == null ? null : num(b.next_weight_manual);
+    await db.run('UPDATE program_exercises SET next_weight_manual = ? WHERE id = ?', [w, idn(p.id)]);
+    return db.one('SELECT * FROM program_exercises WHERE id = ?', [idn(p.id)]);
   },
 
   'GET /api/body': async () => db.q('SELECT * FROM body_logs ORDER BY date'),
@@ -207,6 +417,15 @@ const api = {
   'GET /api/summary': async (b, p, query) => {
     const today = query.today || new Date().toISOString().slice(0, 10);
     const weekAgo = new Date(new Date(today + 'T00:00:00Z').getTime() - 6 * 864e5).toISOString().slice(0, 10);
+    const active = await db.one('SELECT * FROM program_versions WHERE is_active = 1 ORDER BY version_no DESC LIMIT 1');
+    let mesocycle = null;
+    if (active && active.start_date) {
+      const week = weeksSince(active.start_date, today);
+      mesocycle = {
+        version_no: active.version_no, name: active.name, start_date: active.start_date,
+        week, due: week >= 8, over: week > 12,
+      };
+    }
     return {
       total_workouts: Number((await db.one('SELECT COUNT(*) c FROM workouts')).c),
       workouts_this_week: Number((await db.one('SELECT COUNT(*) c FROM workouts WHERE date BETWEEN ? AND ?', [weekAgo, today])).c),
@@ -215,6 +434,7 @@ const api = {
         [weekAgo, today])).v),
       latest_body: (await db.one('SELECT * FROM body_logs ORDER BY date DESC LIMIT 1')) || null,
       protein_today: await db.one('SELECT COALESCE(SUM(protein),0) p, COALESCE(SUM(calories),0) c FROM meals WHERE date = ?', [today]),
+      mesocycle,
     };
   },
 };

@@ -162,3 +162,15 @@ canvas { width: 100%; height: auto; display: block; }
 #login-overlay .login-box { width: 100%; max-width: 340px; }
 #login-overlay .login-logo { font-size: 56px; text-align: center; margin-bottom: 8px; }
 #login-overlay input { margin-bottom: 0; }
+
+/* ===== プログラム/Dayモード（フェーズA） ===== */
+.ex-group {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--surface-2);
+}
+.ex-group .set-line { margin-bottom: 6px; }
+.card.meso-due { border-color: var(--accent); }
+.card.meso-over { border-color: var(--danger); }
