@@ -174,3 +174,10 @@ canvas { width: 100%; height: auto; display: block; }
 .ex-group .set-line { margin-bottom: 6px; }
 .card.meso-due { border-color: var(--accent); }
 .card.meso-over { border-color: var(--danger); }
+
+/* ===== ストレッチ（フェーズB） ===== */
+.st-check {
+  width: 22px; height: 22px; flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}

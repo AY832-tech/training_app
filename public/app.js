@@ -97,7 +97,7 @@ function exerciseOptions(selectedId) {
 }
 
 // ---------- ナビゲーション ----------
-const titles = { home: 'ホーム', log: 'トレ記録', meal: '食事管理', body: '体組成', stats: '統計' };
+const titles = { home: 'ホーム', log: 'トレ記録', stretch: 'ストレッチ', meal: '食事管理', body: '体組成', stats: '統計' };
 const renderers = {};
 async function switchView(v) {
   state.view = v;
@@ -607,6 +607,116 @@ function programEditModal(v, mode) {
     toast('保存しました');
     await programModal();
     if (state.view === 'home') renderers.home();
+  };
+}
+
+// ==================================================
+// ストレッチ（可動域改善）
+// ==================================================
+renderers.stretch = async function () {
+  const el = $('#view-stretch');
+  const date = state.stretchDate || todayStr();
+  state.stretchDate = date;
+  const [stretches, logs, sum] = await Promise.all([
+    get('/api/stretches'),
+    get('/api/stretch-logs?date=' + date),
+    get('/api/stretch-summary?today=' + todayStr()),
+  ]);
+  const logBy = {};
+  logs.forEach((l) => { logBy[Number(l.stretch_id)] = l; });
+
+  const romHint = sum.rom_days_ago == null
+    ? '📏 可動域（ROM）の初回記録をしておきましょう'
+    : sum.rom_days_ago >= 28
+      ? `📏 前回のROM記録から${Math.floor(sum.rom_days_ago / 7)}週経過。4週ごとの記録時期です`
+      : '';
+
+  const section = (timing, title, subtitle) => {
+    const items = stretches.filter((s) => s.timing === timing);
+    return `<div class="card">
+      <div style="font-weight:600">${title}</div>
+      <div class="muted small" style="margin-bottom:4px">${subtitle}</div>
+      ${items.map((s) => {
+        const l = logBy[s.id] || {};
+        return `<div class="row" style="padding:8px 0;border-top:1px solid var(--border);align-items:center">
+          <input type="checkbox" class="st-check" data-st="${s.id}" ${l.done ? 'checked' : ''}>
+          <div class="grow small" style="min-width:0">
+            <b>${esc(s.name)}</b>
+            <div class="muted" style="font-size:11px">${esc(s.detail)} ・ ${esc(s.target)}</div>
+          </div>
+          ${timing === 'post'
+            ? `<input type="number" inputmode="numeric" style="width:56px" placeholder="秒" data-sec="${s.id}" value="${l.seconds ?? ''}">`
+            : ''}
+        </div>`;
+      }).join('')}
+    </div>`;
+  };
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="row between" style="align-items:center">
+        <div><div class="muted small">今週の実施</div>
+          <div class="big">${sum.days_this_week}<span class="unit muted" style="font-size:13px"> 日 / 目標3-5</span></div></div>
+        <div class="field" style="margin:0"><label>記録する日</label>
+          <input type="date" id="st-date" value="${date}"></div>
+      </div>
+      ${romHint ? `<div class="small" style="color:var(--accent);margin-top:6px">${romHint}</div>` : ''}
+    </div>
+    ${section('pre', '🔥 トレーニング前（動的）', 'トレ日に実施')}
+    ${section('post', '🧘 トレ後・休息日（静的）', '各30〜60秒×2セット・週3〜5回')}
+    <div class="card">
+      <div class="row between" style="align-items:center">
+        <div style="font-weight:600">📏 可動域（ROM）の記録</div>
+        <button class="btn-ghost btn-sm" id="rom-add">＋ 記録</button>
+      </div>
+      <div class="muted small" style="margin:2px 0 4px">4週ごとに「スクワットの深さ」「前屈の指先位置」等をメモ</div>
+      <div id="rom-list"></div>
+    </div>`;
+
+  $('#st-date').onchange = (e) => { state.stretchDate = e.target.value; renderers.stretch(); };
+
+  const save = async (id) => {
+    const done = $(`.st-check[data-st="${id}"]`).checked;
+    const secEl = $(`[data-sec="${id}"]`);
+    await post('/api/stretch-logs', {
+      date: state.stretchDate, stretch_id: id, done, seconds: secEl ? secEl.value : null,
+    });
+  };
+  el.querySelectorAll('.st-check').forEach((c) =>
+    c.onchange = () => save(Number(c.dataset.st)).then(() => toast(c.checked ? '実施を記録 ✅' : '記録を解除')));
+  el.querySelectorAll('[data-sec]').forEach((inp) =>
+    inp.onchange = () => save(Number(inp.dataset.sec)));
+
+  const roms = await get('/api/rom');
+  $('#rom-list').innerHTML = roms.length
+    ? roms.map((r) => `<div class="row between small" style="padding:6px 0;border-top:1px solid var(--border)">
+        <div class="grow"><b>${fmtDate(r.date)}</b><div class="muted" style="white-space:pre-wrap">${esc(r.note)}</div></div>
+        <button class="icon-btn" data-romdel="${r.id}">✕</button></div>`).join('')
+    : '<div class="muted small" style="padding:6px 0">まだ記録がありません</div>';
+  $('#rom-list').querySelectorAll('[data-romdel]').forEach((b) =>
+    b.onclick = async () => {
+      if (!confirm('このROM記録を削除しますか？')) return;
+      await del('/api/rom/' + b.dataset.romdel); toast('削除しました'); renderers.stretch();
+    });
+  $('#rom-add').onclick = () => romModal();
+};
+
+function romModal() {
+  openModal(`
+    <h3>可動域（ROM）を記録</h3>
+    <div class="field"><label>日付</label><input type="date" id="rom-date" value="${todayStr()}"></div>
+    <div class="field"><label>メモ</label>
+      <textarea id="rom-note" rows="4" placeholder="例:&#10;スクワット: パラレルまで沈めた&#10;前屈: 指先が床に触れた"></textarea></div>
+    <div class="row">
+      <button class="btn-ghost grow" id="rom-cancel">キャンセル</button>
+      <button class="btn-primary grow" id="rom-save">保存</button>
+    </div>`);
+  $('#rom-cancel').onclick = closeModal;
+  $('#rom-save').onclick = async () => {
+    const note = $('#rom-note').value.trim();
+    if (!note) return toast('メモを入れてください');
+    await post('/api/rom', { date: $('#rom-date').value, note });
+    closeModal(); toast('保存しました'); renderers.stretch();
   };
 }
 

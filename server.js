@@ -368,6 +368,51 @@ const api = {
     return db.one('SELECT * FROM program_exercises WHERE id = ?', [idn(p.id)]);
   },
 
+  // ===== ストレッチ =====
+  'GET /api/stretches': async () =>
+    db.q('SELECT * FROM stretches ORDER BY timing DESC, item_order, id'), // pre → post
+
+  // 指定日の実施ログ（?date=YYYY-MM-DD）
+  'GET /api/stretch-logs': async (b, p, query) =>
+    db.q('SELECT * FROM stretch_logs WHERE date = ?', [query.date || '']),
+
+  // 実施チェック・保持秒の upsert
+  'POST /api/stretch-logs': async (b) => {
+    await db.run(`
+      INSERT INTO stretch_logs (date, stretch_id, done, seconds) VALUES (?, ?, ?, ?)
+      ON CONFLICT(date, stretch_id) DO UPDATE SET done = excluded.done, seconds = excluded.seconds`,
+      [b.date, Number(b.stretch_id), b.done ? 1 : 0,
+       b.seconds === '' || b.seconds == null ? null : num(b.seconds)]);
+    return db.one('SELECT * FROM stretch_logs WHERE date = ? AND stretch_id = ?', [b.date, Number(b.stretch_id)]);
+  },
+
+  // 直近の実施状況サマリ（過去7日で何日やったか）
+  'GET /api/stretch-summary': async (b, p, query) => {
+    const today = query.today || todayLocal();
+    const weekAgo = new Date(new Date(today + 'T00:00:00Z').getTime() - 6 * 864e5).toISOString().slice(0, 10);
+    const r = await db.one(
+      `SELECT COUNT(DISTINCT date) c FROM stretch_logs WHERE done = 1 AND date BETWEEN ? AND ?`,
+      [weekAgo, today]);
+    const lastRom = await db.one('SELECT * FROM rom_logs ORDER BY date DESC, id DESC LIMIT 1');
+    let romDueDays = null;
+    if (lastRom) {
+      romDueDays = Math.floor((new Date(today + 'T00:00:00Z') - new Date(lastRom.date + 'T00:00:00Z')) / 864e5);
+    }
+    return { days_this_week: Number(r.c), last_rom: lastRom || null, rom_days_ago: romDueDays };
+  },
+
+  // ROM（可動域）メモ
+  'GET /api/rom': async () => db.q('SELECT * FROM rom_logs ORDER BY date DESC, id DESC'),
+  'POST /api/rom': async (b) => {
+    const r = await db.run('INSERT INTO rom_logs (date, note) VALUES (?, ?)',
+      [b.date, String(b.note || '')]);
+    return db.one('SELECT * FROM rom_logs WHERE id = ?', [idn(r.lastInsertRowid)]);
+  },
+  'DELETE /api/rom/:id': async (b, p) => {
+    await db.run('DELETE FROM rom_logs WHERE id = ?', [p.id]);
+    return { ok: true };
+  },
+
   'GET /api/body': async () => db.q('SELECT * FROM body_logs ORDER BY date'),
 
   'POST /api/body': async (b) => {

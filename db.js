@@ -132,6 +132,30 @@ async function init() {
       description TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_vchanges_version ON version_changes(version_id);
+
+    -- ===== ストレッチ（可動域改善） =====
+    CREATE TABLE IF NOT EXISTS stretches (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL UNIQUE,
+      timing     TEXT NOT NULL DEFAULT 'post',  -- pre=トレ前(動的) / post=トレ後・休息日(静的)
+      detail     TEXT NOT NULL DEFAULT '',      -- 回数・秒数の目安
+      target     TEXT NOT NULL DEFAULT '',      -- 対象部位
+      item_order INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS stretch_logs (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      date       TEXT NOT NULL,
+      stretch_id INTEGER NOT NULL,
+      done       INTEGER NOT NULL DEFAULT 0,
+      seconds    INTEGER,
+      UNIQUE(date, stretch_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_stlogs_date ON stretch_logs(date);
+    CREATE TABLE IF NOT EXISTS rom_logs (
+      id    INTEGER PRIMARY KEY AUTOINCREMENT,
+      date  TEXT NOT NULL,
+      note  TEXT NOT NULL DEFAULT ''
+    );
   `);
 
   // 既存テーブルへの列追加（マイグレーション。既存データは保持）
@@ -156,6 +180,37 @@ async function init() {
   }
 
   await seedProgram();
+  await seedStretches();
+}
+
+// 初回のみ: 指示書のストレッチメニューを投入
+async function seedStretches() {
+  const cnt = Number((await one('SELECT COUNT(*) AS c FROM stretches')).c);
+  if (cnt > 0) return;
+  const pre = [
+    ['レッグスイング（前後・左右）', '各10回', '股関節'],
+    ['ワールドグレイテストストレッチ', '各5回', '股関節・胸椎'],
+    ['肩回し＋バンドプルアパート', '15回', '肩甲帯'],
+    ['自重スクワット底で3秒静止', '5回', '足首・股関節'],
+  ];
+  const post = [
+    ['長座体前屈', '30〜60秒×2', 'ハムストリングス'],
+    ['ハーフニーリングランジ', '30〜60秒×2', '腸腰筋'],
+    ['カエルストレッチ', '30〜60秒×2', '内転筋'],
+    ['壁ドリル（足首背屈）', '30〜60秒×2', '足首'],
+    ['ピジョンストレッチ', '30〜60秒×2', '殿筋'],
+    ['ドアフレームストレッチ', '30〜60秒×2', '胸・肩前面'],
+    ['バーぶら下がり', '20〜30秒', '広背筋'],
+    ['フォームローラー胸椎そらし', '30〜60秒×2', '胸椎'],
+  ];
+  const stmts = [];
+  pre.forEach(([n, d, t], i) => stmts.push({
+    sql: 'INSERT INTO stretches (name, timing, detail, target, item_order) VALUES (?, ?, ?, ?, ?)',
+    args: [n, 'pre', d, t, i] }));
+  post.forEach(([n, d, t], i) => stmts.push({
+    sql: 'INSERT INTO stretches (name, timing, detail, target, item_order) VALUES (?, ?, ?, ?, ?)',
+    args: [n, 'post', d, t, i] }));
+  await batch(stmts);
 }
 
 // 初回のみ: Upper/Lower/Full の初期メニューを v1 として投入
