@@ -213,19 +213,21 @@ function setLineHtml(set = {}) {
   return `<div class="set-line" data-set>
     <span class="num">●</span>
     <select class="grow" data-ex>${exerciseOptions(set.exercise_id)}</select>
-    <input type="number" inputmode="decimal" step="0.5" placeholder="kg" style="width:64px" data-w value="${set.weight ?? ''}">
-    <input type="number" inputmode="numeric" placeholder="回" style="width:54px" data-r value="${set.reps ?? ''}">
+    <input type="number" inputmode="decimal" step="0.5" placeholder="kg" style="width:60px" data-w value="${set.weight ?? ''}">
+    <input type="number" inputmode="numeric" placeholder="回" style="width:50px" data-r value="${set.reps ?? ''}">
+    <button class="icon-btn" data-dup type="button" title="このセットを複製">⧉</button>
     <button class="icon-btn" data-rm type="button">✕</button>
   </div>`;
 }
 
 // Day モードの1行（種目は固定）
-function daySetRow(exId, unit, w) {
+function daySetRow(exId, unit, w, r) {
   return `<div class="set-line" data-set data-ex="${exId}">
     <span class="num">●</span>
-    <input type="number" inputmode="decimal" step="0.5" placeholder="重量" style="width:76px" data-w value="${w ?? ''}">
+    <input type="number" inputmode="decimal" step="0.5" placeholder="重量" style="width:72px" data-w value="${w ?? ''}">
     <span class="muted small" style="min-width:18px">${esc(unit || 'kg')}</span>
-    <input type="number" inputmode="numeric" placeholder="回" style="width:56px" data-r value="">
+    <input type="number" inputmode="numeric" placeholder="回" style="width:52px" data-r value="${r ?? ''}">
+    <button class="icon-btn" data-dup type="button" title="このセットを複製">⧉</button>
     <button class="icon-btn" data-rm type="button">✕</button>
   </div>`;
 }
@@ -284,20 +286,43 @@ async function workoutModal(existing) {
       const container = line.parentElement;
       if (container.querySelectorAll('[data-set]').length > 1) line.remove();
     });
+  // ⧉ 複製: 次の行が未入力ならそこへコピー、埋まっていれば複製行を挿入
+  const bindDups = () => setsEl.querySelectorAll('[data-dup]').forEach((b) =>
+    b.onclick = () => {
+      const line = b.closest('[data-set]');
+      const w = $('[data-w]', line).value;
+      const r = $('[data-r]', line).value;
+      if (w === '' && r === '') return toast('先に重量・回数を入力してください');
+      const next = line.nextElementSibling;
+      if (next && next.hasAttribute('data-set') && $('[data-r]', next).value === '') {
+        $('[data-w]', next).value = w;
+        $('[data-r]', next).value = r;
+      } else if (line.dataset.ex) {
+        const unit = ($('span.muted', line) || {}).textContent || 'kg';
+        line.insertAdjacentHTML('afterend', daySetRow(line.dataset.ex, unit, w, r));
+        rebind();
+      } else {
+        line.insertAdjacentHTML('afterend',
+          setLineHtml({ exercise_id: $('[data-ex]', line).value, weight: w, reps: r }));
+        rebind();
+      }
+      toast('セットを複製しました');
+    });
+  const rebind = () => { bindRemovers(); bindDups(); };
   const bindAddRows = () => setsEl.querySelectorAll('[data-addrow]').forEach((b) =>
     b.onclick = () => {
       const grp = b.closest('[data-exgroup]');
       $('.set-rows', grp).insertAdjacentHTML('beforeend', daySetRow(grp.dataset.ex, '', grp.dataset.sugw || ''));
-      bindRemovers();
+      rebind();
     });
-  bindRemovers();
+  rebind();
 
   $('#add-set').onclick = () => {
     const last = setsEl.querySelector('.set-line:last-child');
     const exId = last && $('[data-ex]', last) && $('[data-ex]', last).tagName === 'SELECT'
       ? $('[data-ex]', last).value : undefined;
     setsEl.insertAdjacentHTML('beforeend', setLineHtml({ exercise_id: exId }));
-    bindRemovers();
+    rebind();
   };
 
   if ($('#day-pick')) $('#day-pick').onchange = (e) => {
@@ -306,13 +331,13 @@ async function workoutModal(existing) {
       mode = 'free'; dayId = null;
       setsEl.innerHTML = setLineHtml();
       $('#add-set').style.display = '';
-      bindRemovers();
+      rebind();
       return;
     }
     mode = 'day'; dayId = d.id;
     setsEl.innerHTML = d.exercises.map(exGroupHtml).join('') || setLineHtml();
     $('#add-set').style.display = 'none';
-    bindRemovers(); bindAddRows();
+    rebind(); bindAddRows();
   };
 
   $('#w-cancel').onclick = closeModal;
