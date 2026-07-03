@@ -44,10 +44,26 @@
     'プランク': S(GROUND + '<path d="M9 39h8"/><path d="M13 39v-6"/>' + head(10, 30) + '<path d="M13 33l25 6"/><path d="M38 39l2 4"/>'),
     'ケーブルウッドチョップ': S(GROUND + dot(42, 8, 1.5) + '<path d="M41 9 31 15" stroke-dasharray="2.5 2.5"/>' + head(20, 10) + '<path d="M20 13l2 14"/><path d="M20 17l6-1 5-1"/><path d="M22 27l-4 8-1 9M22 27l4 8v9"/>'),
     'プランク（プレート）': null, // 予備
+
+    // ===== ストレッチ =====
+    'レッグスイング（前後・左右）': S(GROUND + '<path d="M9 8v28"/>' + head(21, 9) + '<path d="M21 12v14"/><path d="M21 16l-9-1"/><path d="M21 26l-2 9-1 9"/><path d="M21 26l9-6"/><path d="M27 31q7-3 5-13" stroke-dasharray="2.5 2.5"/>'),
+    'ワールドグレイテストストレッチ': S(GROUND + head(29, 19) + '<path d="M14 42v-8l6-2"/><path d="M20 32l18 10"/><path d="M20 32l6-10"/><path d="M26 22l-5 16"/><path d="M26 22l4-11"/>' + dot(30, 10)),
+    '肩回し＋バンドプルアパート': S(GROUND + head(24, 9) + '<path d="M24 12v14"/><path d="M24 16H10M24 16h14"/><path d="M10 17c9 5 19 5 28 0" stroke-dasharray="2.5 2.5"/><path d="M24 26l-3 9v9M24 26l3 9v9"/>'),
+    '自重スクワット底で3秒静止': S(GROUND + head(23, 14) + '<path d="M23 17l-2 9"/><path d="M21 26l9 4"/><path d="M30 30l-3 12"/><path d="M23 20h10"/>'),
+    '長座体前屈': S(GROUND + '<path d="M13 41h23"/><path d="M36 41l1-5"/>' + head(27, 30) + '<path d="M14 39l10-7"/><path d="M25 33l9 5"/>'),
+    'ハーフニーリングランジ': S(GROUND + head(27, 15) + '<path d="M27 18l-1 14"/><path d="M26 32l-10 0"/><path d="M16 32l-2 10"/><path d="M26 32l3 10"/><path d="M29 42h8"/>'),
+    'カエルストレッチ': S(GROUND + head(11, 33) + '<path d="M13 35l15 1"/><path d="M28 36l4 6"/><path d="M32 42h6"/><path d="M10 40h9"/>'),
+    '壁ドリル（足首背屈）': S(GROUND + '<path d="M38 8v34"/>' + head(21, 12) + '<path d="M21 15l5 13"/><path d="M21 19l15-3"/><path d="M26 28l4 6v8"/><path d="M26 28l-4 8v8"/>'),
+    'ピジョンストレッチ': S(GROUND + '<path d="M12 41l10-2"/><path d="M22 39l16 3"/>' + head(21, 21) + '<path d="M22 38l-1-14"/><path d="M21 28l-7 10"/>'),
+    'ドアフレームストレッチ': S(GROUND + '<path d="M31 6v38"/>' + head(17, 10) + '<path d="M17 13v15"/><path d="M17 16l14-2"/><path d="M17 28l-4 8-2 8"/><path d="M17 28l6 7 2 9"/>'),
+    'バーぶら下がり': S('<path d="M10 7h28"/><path d="M19 7l4 11M29 7l-4 11"/>' + head(24, 21) + '<path d="M24 24v10"/><path d="M24 34l-2 8M24 34l2 8"/>'),
+    'フォームローラー胸椎そらし': S(GROUND + '<circle cx="26" cy="38" r="4"/>' + dot(26, 38, 1.2) + '<path d="M8 42l8-8"/><path d="M16 34c4-4 8-6 13-4"/>' + head(32, 32) + '<path d="M29 30l7 3"/>'),
   };
   ICONS['ケーブルプレスダウン'] = ICONS['トライセプスプレスダウン'];
 
   const DEFAULT = S('<path d="M16 24h16"/><path d="M14 18v12M34 18v12"/><path d="M10 21v6M38 21v6"/>');
+  // ストレッチ用の汎用（前屈する人）
+  const ST_DEFAULT = S(GROUND + '<path d="M13 41h23"/><path d="M36 41l1-5"/>' + head(27, 30) + '<path d="M14 39l10-7"/><path d="M25 33l9 5"/>');
 
-  window.exIcon = (name) => ICONS[name] || DEFAULT;
+  window.exIcon = (name, kind) => ICONS[name] || (kind === 'stretch' ? ST_DEFAULT : DEFAULT);
 })();

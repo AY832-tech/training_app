@@ -76,16 +76,17 @@ async function logout() {
 }
 
 // ---------- 種目情報ポップアップ（どこからでも開ける別レイヤー） ----------
-function exerciseInfoModal(name) {
+function exerciseInfoModal(name, muscles, kind) {
   const ex = state.exercises.find((e) => e.name === name) || {};
+  const m = muscles || ex.muscles;
   const q = encodeURIComponent(name + ' やり方 フォーム');
   const el = document.createElement('div');
   el.className = 'info-overlay';
   el.innerHTML = `
     <div class="info-box">
-      <div class="info-ico">${exIcon(name)}</div>
+      <div class="info-ico">${exIcon(name, kind)}</div>
       <h3 style="text-align:center;margin:6px 0 2px">${esc(name)}</h3>
-      ${ex.muscles ? `<div class="muscles" style="text-align:center;margin-bottom:10px">🎯 ${esc(ex.muscles)}</div>` : '<div style="height:8px"></div>'}
+      ${m ? `<div class="muscles" style="text-align:center;margin-bottom:10px">🎯 ${esc(m)}</div>` : '<div style="height:8px"></div>'}
       <a class="btn-ghost btn-block btn-sm link-btn" target="_blank" rel="noopener"
          href="https://www.youtube.com/results?search_query=${q}">▶ YouTubeでフォームを見る</a>
       <a class="btn-ghost btn-block btn-sm link-btn" target="_blank" rel="noopener"
@@ -100,7 +101,7 @@ function exerciseInfoModal(name) {
 // アイコンや種目名（data-exinfo）のタップで情報を開く（全画面共通）
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-exinfo]');
-  if (t) exerciseInfoModal(t.dataset.exinfo);
+  if (t) exerciseInfoModal(t.dataset.exinfo, t.dataset.exmuscle, t.dataset.exkind);
 });
 
 // ---------- モーダル ----------
@@ -783,6 +784,7 @@ renderers.stretch = async function () {
         const l = logBy[s.id] || {};
         return `<div class="row" style="padding:8px 0;border-top:1px solid var(--border);align-items:center">
           <input type="checkbox" class="st-check" data-st="${s.id}" ${l.done ? 'checked' : ''}>
+          <span class="ex-ico" data-exinfo="${esc(s.name)}" data-exmuscle="${esc(s.target)}" data-exkind="stretch">${exIcon(s.name, 'stretch')}</span>
           <div class="grow small" style="min-width:0">
             <b>${esc(s.name)}</b>
             <div class="muted" style="font-size:11px">${esc(s.detail)} ・ ${esc(s.target)}</div>
@@ -875,6 +877,7 @@ async function stretchManageModal() {
       return `<div class="muted small" style="margin:10px 0 4px;font-weight:600">${title}</div>` +
         (list.length ? list.map((s) => `
           <div class="row between" style="padding:7px 0;border-bottom:1px solid var(--border);align-items:center">
+            <span class="ex-ico" data-exinfo="${esc(s.name)}" data-exmuscle="${esc(s.target)}" data-exkind="stretch">${exIcon(s.name, 'stretch')}</span>
             <div class="grow small"><b>${esc(s.name)}</b>
               <div class="muted" style="font-size:11px">${esc(s.detail)}${s.target ? ' ・ ' + esc(s.target) : ''}</div></div>
             <span style="white-space:nowrap">
