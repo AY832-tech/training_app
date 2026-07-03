@@ -61,14 +61,18 @@ const idn = (v) => Number(v); // BigInt -> Number
 const round2 = (n) => Math.round(n * 100) / 100;
 const todayLocal = () => new Date().toLocaleDateString('sv-SE');
 
-// セットを各ワークアウトに付与
+// セットを各ワークアウトに付与（IN句で1クエリにまとめる）
 async function attachSets(workouts) {
-  for (const w of workouts) {
-    w.sets = await db.q(`
-      SELECT ws.*, e.name AS exercise_name, e.unit, e.category
-      FROM workout_sets ws JOIN exercises e ON e.id = ws.exercise_id
-      WHERE ws.workout_id = ? ORDER BY ws.set_order, ws.id`, [w.id]);
-  }
+  if (!workouts.length) return workouts;
+  const ids = workouts.map((w) => idn(w.id));
+  const sets = await db.q(`
+    SELECT ws.*, e.name AS exercise_name, e.unit, e.category
+    FROM workout_sets ws JOIN exercises e ON e.id = ws.exercise_id
+    WHERE ws.workout_id IN (${ids.map(() => '?').join(',')})
+    ORDER BY ws.set_order, ws.id`, ids);
+  const by = {};
+  sets.forEach((s) => { (by[Number(s.workout_id)] ||= []).push(s); });
+  workouts.forEach((w) => { w.sets = by[idn(w.id)] || []; });
   return workouts;
 }
 
@@ -81,19 +85,22 @@ function weeksSince(start, today) {
   return Math.floor(ms / (7 * 864e5)) + 1;
 }
 
-// ある種目の「直近セッション」の実施セット（重量・レップ）
-async function lastSessionSets(exerciseId) {
-  const w = await db.one(
-    `SELECT w.id, w.date FROM workouts w
-     JOIN workout_sets ws ON ws.workout_id = w.id
-     WHERE ws.exercise_id = ?
-     ORDER BY w.date DESC, w.id DESC LIMIT 1`, [exerciseId]);
-  if (!w) return null;
-  const sets = await db.q(
-    `SELECT weight, reps FROM workout_sets
-     WHERE workout_id = ? AND exercise_id = ? ORDER BY set_order, id`,
-    [idn(w.id), exerciseId]);
-  return { date: w.date, sets };
+// 複数種目の「直近セッション」を1クエリでまとめて取得（{exercise_id: {date, sets}}）
+async function lastSessionsFor(exIds) {
+  if (!exIds.length) return {};
+  const rows = await db.q(`
+    SELECT exercise_id, date, weight, reps FROM (
+      SELECT ws.exercise_id, w.date, ws.weight, ws.reps, ws.set_order, ws.id,
+             DENSE_RANK() OVER (PARTITION BY ws.exercise_id ORDER BY w.date DESC, w.id DESC) rnk
+      FROM workout_sets ws JOIN workouts w ON w.id = ws.workout_id
+      WHERE ws.exercise_id IN (${exIds.map(() => '?').join(',')})
+    ) WHERE rnk = 1 ORDER BY exercise_id, set_order, id`, exIds);
+  const map = {};
+  rows.forEach((r) => {
+    const k = Number(r.exercise_id);
+    (map[k] ||= { date: r.date, sets: [] }).sets.push({ weight: r.weight, reps: r.reps });
+  });
+  return map;
 }
 
 // 次回重量の提案（手動 > 自動漸進 > 前回維持 > なし）
@@ -111,15 +118,18 @@ function suggest(pex, last) {
   return { weight: lastWeight, source: 'last' };
 }
 
-// バージョンの days/exercises を読み込んで v に付与
+// バージョンの days/exercises を読み込んで v に付与（2クエリ固定）
 async function buildVersion(v) {
   if (!v) return null;
   const days = await db.q('SELECT * FROM program_days WHERE version_id = ? ORDER BY day_order, id', [v.id]);
-  for (const d of days) {
-    d.exercises = await db.q(
+  if (days.length) {
+    const dids = days.map((d) => idn(d.id));
+    const exs = await db.q(
       `SELECT pe.*, e.name AS exercise_name, e.unit, e.category, e.muscles
        FROM program_exercises pe JOIN exercises e ON e.id = pe.exercise_id
-       WHERE pe.day_id = ? ORDER BY pe.item_order, pe.id`, [d.id]);
+       WHERE pe.day_id IN (${dids.map(() => '?').join(',')})
+       ORDER BY pe.item_order, pe.id`, dids);
+    days.forEach((d) => { d.exercises = exs.filter((x) => Number(x.day_id) === idn(d.id)); });
   }
   v.days = days;
   return v;
@@ -130,9 +140,11 @@ async function buildActiveProgram() {
   const v = await db.one('SELECT * FROM program_versions WHERE is_active = 1 ORDER BY version_no DESC LIMIT 1');
   if (!v) return null;
   await buildVersion(v);
+  const exIds = [...new Set(v.days.flatMap((d) => d.exercises.map((pe) => Number(pe.exercise_id))))];
+  const lastMap = await lastSessionsFor(exIds);
   for (const d of v.days) {
     for (const pe of d.exercises) {
-      const last = await lastSessionSets(pe.exercise_id);
+      const last = lastMap[Number(pe.exercise_id)] || null;
       pe.last_session = last;
       pe.suggestion = suggest(pex(pe), last);
     }
@@ -261,12 +273,14 @@ const api = {
 
   'GET /api/templates': async () => {
     const tpls = await db.q('SELECT * FROM templates ORDER BY name');
-    for (const t of tpls) {
-      t.items = await db.q(`
-        SELECT ti.*, e.name AS exercise_name, e.unit
-        FROM template_items ti JOIN exercises e ON e.id = ti.exercise_id
-        WHERE ti.template_id = ? ORDER BY ti.item_order, ti.id`, [t.id]);
-    }
+    if (!tpls.length) return tpls;
+    const ids = tpls.map((t) => idn(t.id));
+    const items = await db.q(`
+      SELECT ti.*, e.name AS exercise_name, e.unit
+      FROM template_items ti JOIN exercises e ON e.id = ti.exercise_id
+      WHERE ti.template_id IN (${ids.map(() => '?').join(',')})
+      ORDER BY ti.item_order, ti.id`, ids);
+    tpls.forEach((t) => { t.items = items.filter((i) => Number(i.template_id) === idn(t.id)); });
     return tpls;
   },
 
@@ -553,7 +567,16 @@ const api = {
   'GET /api/summary': async (b, p, query) => {
     const today = query.today || new Date().toISOString().slice(0, 10);
     const weekAgo = new Date(new Date(today + 'T00:00:00Z').getTime() - 6 * 864e5).toISOString().slice(0, 10);
-    const active = await db.one('SELECT * FROM program_versions WHERE is_active = 1 ORDER BY version_no DESC LIMIT 1');
+    // 6クエリを1往復にまとめる（リモートDBの往復回数を削減）
+    const [rActive, rTotal, rWeek, rVol, rBody, rMeal] = await db.batchRead([
+      { sql: 'SELECT * FROM program_versions WHERE is_active = 1 ORDER BY version_no DESC LIMIT 1', args: [] },
+      { sql: 'SELECT COUNT(*) c FROM workouts', args: [] },
+      { sql: 'SELECT COUNT(*) c FROM workouts WHERE date BETWEEN ? AND ?', args: [weekAgo, today] },
+      { sql: 'SELECT COALESCE(SUM(ws.weight*ws.reps),0) v FROM workout_sets ws JOIN workouts w ON w.id=ws.workout_id WHERE w.date BETWEEN ? AND ?', args: [weekAgo, today] },
+      { sql: 'SELECT * FROM body_logs ORDER BY date DESC LIMIT 1', args: [] },
+      { sql: 'SELECT COALESCE(SUM(protein),0) p, COALESCE(SUM(calories),0) c FROM meals WHERE date = ?', args: [today] },
+    ]);
+    const active = rActive.rows[0];
     let mesocycle = null;
     if (active && active.start_date) {
       const week = weeksSince(active.start_date, today);
@@ -563,13 +586,11 @@ const api = {
       };
     }
     return {
-      total_workouts: Number((await db.one('SELECT COUNT(*) c FROM workouts')).c),
-      workouts_this_week: Number((await db.one('SELECT COUNT(*) c FROM workouts WHERE date BETWEEN ? AND ?', [weekAgo, today])).c),
-      total_volume_this_week: Number((await db.one(
-        `SELECT COALESCE(SUM(ws.weight*ws.reps),0) v FROM workout_sets ws JOIN workouts w ON w.id=ws.workout_id WHERE w.date BETWEEN ? AND ?`,
-        [weekAgo, today])).v),
-      latest_body: (await db.one('SELECT * FROM body_logs ORDER BY date DESC LIMIT 1')) || null,
-      protein_today: await db.one('SELECT COALESCE(SUM(protein),0) p, COALESCE(SUM(calories),0) c FROM meals WHERE date = ?', [today]),
+      total_workouts: Number(rTotal.rows[0].c),
+      workouts_this_week: Number(rWeek.rows[0].c),
+      total_volume_this_week: Number(rVol.rows[0].v),
+      latest_body: rBody.rows[0] || null,
+      protein_today: rMeal.rows[0],
       mesocycle,
     };
   },

@@ -18,6 +18,8 @@ const q = async (sql, args = []) => (await client.execute({ sql, args })).rows;
 const one = async (sql, args = []) => (await client.execute({ sql, args })).rows[0];
 const run = async (sql, args = []) => await client.execute({ sql, args });
 const batch = async (stmts) => await client.batch(stmts, 'write');
+// 複数の読み取りを1往復で実行（本番のDBはリモートなので往復回数が支配的）
+const batchRead = async (stmts) => await client.batch(stmts, 'read');
 const idn = (v) => Number(v);
 
 // 既存テーブルに列が無ければ追加（SQLite は ADD COLUMN IF NOT EXISTS 非対応のため自前判定）
@@ -317,4 +319,4 @@ async function seedProgram() {
   }
 }
 
-module.exports = { client, init, q, one, run, batch, ensureExercise };
+module.exports = { client, init, q, one, run, batch, batchRead, ensureExercise };
