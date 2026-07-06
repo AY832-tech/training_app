@@ -2,16 +2,25 @@
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
+const _inflight = new Map();
 const api = async (method, url, body) => {
-  const res = await fetch(url, {
-    method,
-    credentials: 'same-origin',
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (res.status === 401 && url !== '/api/auth') { showLogin(); throw new Error('要ログイン'); }
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-  return res.json();
+  // 二重送信防止(③): 同一の POST/PUT が飛行中なら既存の Promise を使い回し、重複登録を防ぐ
+  const key = (method === 'POST' || method === 'PUT')
+    ? `${method} ${url} ${JSON.stringify(body ?? '')}` : null;
+  if (key && _inflight.has(key)) return _inflight.get(key);
+  const run = (async () => {
+    const res = await fetch(url, {
+      method,
+      credentials: 'same-origin',
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 401 && url !== '/api/auth') { showLogin(); throw new Error('要ログイン'); }
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    return res.json();
+  })();
+  if (key) { _inflight.set(key, run); run.finally(() => _inflight.delete(key)); }
+  return run;
 };
 const get = (u) => api('GET', u);
 const post = (u, b) => api('POST', u, b);
@@ -34,6 +43,55 @@ function toast(msg) {
   t.classList.add('show');
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.remove('show'), 1600);
+}
+
+// 二重送信防止(③): クリックした瞬間にボタンを無効化し、処理完了まで多重クリックを無視する。
+// これにより「押しても反応がなく何度も押す→重複登録」を防ぐ。
+function guard(btn, fn, busyLabel = '保存中…') {
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (btn.dataset.busy) return;
+    btn.dataset.busy = '1';
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.style.opacity = '.6';
+    if (busyLabel) btn.textContent = busyLabel;
+    try {
+      await fn();
+    } catch (e) {
+      toast(e.message || 'エラーが発生しました');
+    } finally {
+      delete btn.dataset.busy;
+      btn.disabled = false;
+      btn.style.opacity = '';
+      btn.textContent = orig;
+    }
+  });
+}
+
+// iOS のホーム画面アプリ(スタンドアロンPWA)判定。別アプリへの遷移方法が特殊なため使う。
+const IS_IOS_PWA = /iP(hone|ad|od)/.test(navigator.userAgent) &&
+  (navigator.standalone === true ||
+    (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
+
+// 外部URLを「別アプリのブラウザ」でワンタップで開く(④)。
+// iOSホーム画面アプリでは通常リンクだとアプリ内WebViewで開き Chrome 等に切り替わらないため、
+// Chrome のカスタムスキームで直接起動し、未インストール時は通常ブラウザにフォールバックする。
+function openExternal(url) {
+  if (!IS_IOS_PWA) { window.open(url, '_blank', 'noopener'); return; }
+  const chromeUrl = url
+    .replace(/^https:\/\//, 'googlechromes://')
+    .replace(/^http:\/\//, 'googlechrome://');
+  let switched = false;
+  const onHide = () => { if (document.hidden) switched = true; };
+  document.addEventListener('visibilitychange', onHide);
+  // Chrome 未インストールだとスキームが無反応 → 少し待って通常ブラウザで開く
+  const fallback = setTimeout(() => {
+    document.removeEventListener('visibilitychange', onHide);
+    if (!switched) window.open(url, '_blank', 'noopener');
+  }, 500);
+  window.addEventListener('pagehide', () => clearTimeout(fallback), { once: true });
+  window.location.href = chromeUrl;
 }
 
 // ---------- ログイン ----------
@@ -87,13 +145,15 @@ function exerciseInfoModal(name, muscles, kind) {
       <div class="info-ico">${exIcon(name, kind)}</div>
       <h3 style="text-align:center;margin:6px 0 2px">${esc(name)}</h3>
       ${m ? `<div class="muscles" style="text-align:center;margin-bottom:10px">🎯 ${esc(m)}</div>` : '<div style="height:8px"></div>'}
-      <a class="btn-ghost btn-block btn-sm link-btn" target="_blank" rel="noopener"
+      <a class="btn-ghost btn-block btn-sm link-btn" data-ext target="_blank" rel="noopener"
          href="https://www.youtube.com/results?search_query=${q}">▶ YouTubeでフォームを見る</a>
-      <a class="btn-ghost btn-block btn-sm link-btn" target="_blank" rel="noopener"
+      <a class="btn-ghost btn-block btn-sm link-btn" data-ext target="_blank" rel="noopener"
          href="https://www.google.com/search?tbm=isch&q=${q}">🖼 写真・画像を検索</a>
       <button class="btn-primary btn-block btn-sm" data-close style="margin-top:6px">閉じる</button>
     </div>`;
   el.addEventListener('click', (e) => {
+    const link = e.target.closest('[data-ext]');
+    if (link) { e.preventDefault(); openExternal(link.getAttribute('href')); el.remove(); return; }
     if (e.target === el || e.target.closest('[data-close]')) el.remove();
   });
   document.body.appendChild(el);
@@ -117,13 +177,84 @@ const state = { exercises: [], view: 'home' };
 async function loadExercises() { state.exercises = await get('/api/exercises'); }
 const exById = (id) => state.exercises.find((e) => e.id === Number(id));
 
-function exerciseOptions(selectedId) {
+function exerciseOptions(selectedId, withNew = false) {
   const cats = [...new Set(state.exercises.map((e) => e.category))];
-  return cats.map((c) => `<optgroup label="${esc(c)}">` +
+  const groups = cats.map((c) => `<optgroup label="${esc(c)}">` +
     state.exercises.filter((e) => e.category === c)
       .map((e) => `<option value="${e.id}" ${e.id === Number(selectedId) ? 'selected' : ''}>${esc(e.name)}</option>`)
       .join('') + '</optgroup>').join('');
+  // withNew: 末尾に「新しい種目を作成」を出し、選択されたらインラインで作成できる(①)
+  return groups + (withNew ? '<option value="__new__">＋ 新しい種目を作成…</option>' : '');
 }
+
+// モーダル/画面内の全種目セレクトを最新の種目リストで再構築（選択値は保持）
+function refreshExerciseSelects(root = document) {
+  root.querySelectorAll('select[data-ex]').forEach((sel) => {
+    const cur = sel.value;
+    sel.innerHTML = exerciseOptions(cur, true);
+    sel.value = cur;
+    sel.dataset.prev = cur;
+  });
+}
+
+// 種目を新規作成する軽量オーバーレイ(①)。メニュー編集や記録の途中でも他モーダルを壊さず開ける。
+// 作成に成功したら onCreated(newExercise) を呼ぶ。
+function quickAddExercise(onCreated, prefillName = '') {
+  const cats = ['胸', '背中', '脚', '肩', '腕', '腹', 'その他'];
+  const el = document.createElement('div');
+  el.className = 'info-overlay';
+  el.innerHTML = `
+    <div class="info-box">
+      <h3 style="margin:0 0 12px">新しい種目を作成</h3>
+      <div class="field"><label>種目名</label>
+        <input id="qa-name" placeholder="例: インクラインベンチ" value="${esc(prefillName)}"></div>
+      <div class="field-row">
+        <div class="field"><label>部位</label>
+          <select id="qa-cat">${cats.map((c) => `<option>${c}</option>`).join('')}</select></div>
+        <div class="field" style="flex:.7"><label>単位</label>
+          <select id="qa-unit"><option>kg</option><option>回</option><option>秒</option></select></div>
+      </div>
+      <div class="field"><label>対象筋（任意）</label>
+        <input id="qa-muscles" placeholder="例: 大胸筋・上腕三頭筋"></div>
+      <div class="row">
+        <button class="btn-ghost grow" data-cancel type="button">キャンセル</button>
+        <button class="btn-primary grow" id="qa-save" type="button">作成</button>
+      </div>
+    </div>`;
+  el.addEventListener('click', (e) => {
+    if (e.target === el || e.target.closest('[data-cancel]')) el.remove();
+  });
+  document.body.appendChild(el);
+  $('#qa-name', el).focus();
+  guard($('#qa-save', el), async () => {
+    const name = $('#qa-name', el).value.trim();
+    if (!name) { toast('種目名を入れてください'); return; }
+    const ex = await post('/api/exercises', {
+      name, category: $('#qa-cat', el).value, unit: $('#qa-unit', el).value,
+      muscles: $('#qa-muscles', el).value,
+    });
+    state.exercises.push(ex);
+    state.exercises.sort((a, b) =>
+      (a.category + a.name).localeCompare(b.category + b.name, 'ja'));
+    el.remove();
+    toast('種目を作成しました');
+    onCreated(ex);
+  }, '作成中…');
+}
+
+// 種目セレクトで「＋ 新しい種目を作成…」が選ばれたらインライン作成へ(①・全ドロップダウン共通)
+document.addEventListener('change', (e) => {
+  const sel = e.target;
+  if (sel.tagName !== 'SELECT' || !sel.hasAttribute('data-ex')) return;
+  if (sel.value !== '__new__') { sel.dataset.prev = sel.value; return; }
+  const prev = sel.dataset.prev || '';
+  quickAddExercise((ex) => {
+    refreshExerciseSelects(document);
+    sel.value = String(ex.id);
+    sel.dataset.prev = sel.value;
+  });
+  sel.value = prev; // オーバーレイを閉じる/キャンセル時は元の選択に戻す
+});
 
 // ---------- ナビゲーション ----------
 const titles = { home: 'ホーム', log: 'トレ記録', stretch: 'ストレッチ', meal: '食事管理', body: '体組成', stats: '統計' };
@@ -241,7 +372,7 @@ renderers.log = async function () {
 function setLineHtml(set = {}) {
   return `<div class="set-line" data-set>
     <span class="num">●</span>
-    <select class="grow" data-ex>${exerciseOptions(set.exercise_id)}</select>
+    <select class="grow" data-ex>${exerciseOptions(set.exercise_id, true)}</select>
     <input type="number" inputmode="decimal" step="0.5" placeholder="kg" style="width:60px" data-w value="${set.weight ?? ''}">
     <input type="number" inputmode="numeric" placeholder="回" style="width:50px" data-r value="${set.reps ?? ''}">
     <button class="icon-btn" data-dup type="button" title="このセットを複製">⧉</button>
@@ -302,6 +433,7 @@ async function workoutModal(existing) {
     <label>種目・セット</label>
     <div id="sets">${(isEdit ? existing.sets : [{}]).map(setLineHtml).join('')}</div>
     <button class="btn-ghost btn-block btn-sm" id="add-set" type="button" style="margin-bottom:12px">＋ セット追加</button>
+    <button class="btn-ghost btn-block btn-sm" id="add-ex" type="button" style="margin-bottom:12px;display:none">＋ 種目を追加（今回だけ）</button>
     <div class="field"><label>メモ</label><textarea id="w-note" rows="2" placeholder="調子・気づきなど">${esc(existing?.note || '')}</textarea></div>
     <div class="row">
       ${isEdit ? `<button class="btn-danger" id="w-del">削除</button>` : ''}
@@ -357,6 +489,11 @@ async function workoutModal(existing) {
     setsEl.insertAdjacentHTML('beforeend', setLineHtml({ exercise_id: exId }));
     rebind();
   };
+  // Dayモードでもメニュー外の種目をその場で追加できる(①)。自由入力行を末尾に足す。
+  $('#add-ex').onclick = () => {
+    setsEl.insertAdjacentHTML('beforeend', setLineHtml());
+    rebind();
+  };
 
   if ($('#day-pick')) $('#day-pick').onchange = (e) => {
     const d = (prog.days || []).find((x) => x.id === Number(e.target.value));
@@ -364,17 +501,19 @@ async function workoutModal(existing) {
       mode = 'free'; dayId = null;
       setsEl.innerHTML = setLineHtml();
       $('#add-set').style.display = '';
+      $('#add-ex').style.display = 'none';
       rebind();
       return;
     }
     mode = 'day'; dayId = d.id;
     setsEl.innerHTML = d.exercises.map(exGroupHtml).join('') || setLineHtml();
     $('#add-set').style.display = 'none';
+    $('#add-ex').style.display = '';
     rebind(); bindAddRows();
   };
 
   $('#w-cancel').onclick = closeModal;
-  $('#w-save').onclick = async () => {
+  guard($('#w-save'), async () => {
     const sets = [...setsEl.querySelectorAll('[data-set]')].map((r) => {
       const w = $('[data-w]', r).value;
       const reps = $('[data-r]', r).value;
@@ -401,12 +540,12 @@ async function workoutModal(existing) {
     if (isEdit) await put('/api/workouts/' + existing.id, payload);
     else await post('/api/workouts', payload);
     closeModal(); toast('保存しました'); renderers[state.view]();
-  };
-  if (isEdit) $('#w-del').onclick = async () => {
+  });
+  if (isEdit) guard($('#w-del'), async () => {
     if (!confirm('この記録を削除しますか？')) return;
     await del('/api/workouts/' + existing.id);
     closeModal(); toast('削除しました'); renderers[state.view]();
-  };
+  }, '削除中…');
 }
 
 // ---------- 種目管理 ----------
@@ -455,15 +594,15 @@ async function exerciseModal() {
       });
   };
   renderList();
-  $('#ex-add').onclick = async () => {
+  guard($('#ex-add'), async () => {
     const name = $('#ex-name').value.trim();
-    if (!name) return toast('種目名を入れてください');
+    if (!name) { toast('種目名を入れてください'); return; }
     try {
       await post('/api/exercises', { name, category: $('#ex-cat').value, unit: $('#ex-unit').value,
         muscles: $('#ex-muscles').value });
       await loadExercises(); renderList(); $('#ex-name').value = ''; $('#ex-muscles').value = ''; toast('追加しました');
     } catch (e) { toast('同名の種目が既にあります'); }
-  };
+  }, '追加中…');
   $('#ex-close').onclick = closeModal;
 }
 
@@ -492,7 +631,7 @@ async function templateListModal() {
 
 function tplItemHtml(it = {}) {
   return `<div class="set-line" data-item>
-    <select class="grow" data-ex>${exerciseOptions(it.exercise_id)}</select>
+    <select class="grow" data-ex>${exerciseOptions(it.exercise_id, true)}</select>
     <input type="number" inputmode="numeric" style="width:50px" placeholder="ｾｯﾄ" data-sets value="${it.target_sets ?? 3}">
     <span class="muted small">×</span>
     <input type="number" inputmode="numeric" style="width:50px" placeholder="回" data-reps value="${it.target_reps ?? 10}">
@@ -517,9 +656,9 @@ function templateEditModal() {
   bind();
   $('#tpl-add-item').onclick = () => { itemsEl.insertAdjacentHTML('beforeend', tplItemHtml()); bind(); };
   $('#tpl-cancel').onclick = () => templateListModal();
-  $('#tpl-save').onclick = async () => {
+  guard($('#tpl-save'), async () => {
     const name = $('#tpl-name').value.trim();
-    if (!name) return toast('名前を入れてください');
+    if (!name) { toast('名前を入れてください'); return; }
     const items = [...itemsEl.querySelectorAll('[data-item]')].map((r) => ({
       exercise_id: Number($('[data-ex]', r).value),
       target_sets: $('[data-sets]', r).value,
@@ -527,7 +666,7 @@ function templateEditModal() {
     })).filter((i) => i.exercise_id);
     await post('/api/templates', { name, items });
     toast('保存しました'); templateListModal();
-  };
+  });
 }
 
 // ==================================================
@@ -577,9 +716,9 @@ function renderProgramView(versionId) {
           </div>`).join('')}
       </div>`).join('')}
     <div class="row wrap" style="margin-top:8px">
+      <button class="btn-ghost btn-sm" id="p-edit">✏️ 編集</button>
       ${v.is_active
-        ? `<button class="btn-ghost btn-sm" id="p-edit">✏️ 編集（軽微）</button>
-           <button class="btn-ghost btn-sm" id="p-new">🔄 新バージョン</button>`
+        ? `<button class="btn-ghost btn-sm" id="p-new">🔄 新バージョン</button>`
         : `<button class="btn-ghost btn-sm" id="p-activate">この版を現行にする</button>`}
       <button class="btn-ghost btn-sm" id="p-hist">変更履歴</button>
     </div>
@@ -651,7 +790,7 @@ function importModal() {
     r.readAsText(f);
   };
   $('#imp-back').onclick = () => programModal();
-  $('#imp-go').onclick = async () => {
+  guard($('#imp-go'), async () => {
     const raw = $('#imp-text').value.trim();
     if (!raw) { $('#imp-err').textContent = 'JSONを入力してください'; return; }
     let menu;
@@ -662,7 +801,7 @@ function importModal() {
       await programModal();
       if (state.view === 'home') renderers.home();
     } catch (e) { $('#imp-err').textContent = e.message; }
-  };
+  }, '取込中…');
 }
 
 async function programHistoryModal(versionId) {
@@ -676,7 +815,7 @@ async function programHistoryModal(versionId) {
 
 function progExRow(it = {}) {
   return `<div class="set-line" data-pit data-inc="${it.increment ?? 2.5}">
-    <select class="grow" data-ex>${exerciseOptions(it.exercise_id)}</select>
+    <select class="grow" data-ex>${exerciseOptions(it.exercise_id, true)}</select>
     <input type="number" inputmode="numeric" style="width:40px" data-sets placeholder="ｾｯﾄ" value="${it.target_sets ?? 3}">
     <input type="number" inputmode="numeric" style="width:40px" data-rmin placeholder="min" value="${it.rep_min ?? 8}">
     <span class="muted small">-</span>
@@ -732,7 +871,7 @@ function programEditModal(v, mode) {
   bindDay(); bindItem();
   $('#pe-addday').onclick = () => { daysEl.insertAdjacentHTML('beforeend', progDayHtml({})); bindDay(); bindItem(); };
   $('#pe-cancel').onclick = () => programModal();
-  $('#pe-save').onclick = async () => {
+  guard($('#pe-save'), async () => {
     const days = [...daysEl.querySelectorAll('[data-pday]')].map((dEl) => ({
       name: $('[data-dayname]', dEl).value.trim() || 'Day',
       exercises: [...dEl.querySelectorAll('[data-pit]')].map((r) => ({
@@ -743,7 +882,7 @@ function programEditModal(v, mode) {
         increment: r.dataset.inc || 2.5,
       })).filter((x) => x.exercise_id),
     })).filter((d) => d.exercises.length);
-    if (!days.length) return toast('種目を入れてください');
+    if (!days.length) { toast('種目を入れてください'); return; }
     const name = $('#pe-name').value.trim() || (isMajor ? '新メニュー' : v.name);
     const note = $('#pe-note').value.trim();
     if (isMajor) await post('/api/program', { name, note, days, copy_from_version_id: v.id });
@@ -751,7 +890,7 @@ function programEditModal(v, mode) {
     toast('保存しました');
     await programModal();
     if (state.view === 'home') renderers.home();
-  };
+  });
 }
 
 // ==================================================
@@ -919,12 +1058,12 @@ async function stretchManageModal() {
     $('#sm-reset').style.display = 'none';
   };
   $('#sm-reset').onclick = resetForm;
-  $('#sm-save').onclick = async () => {
+  guard($('#sm-save'), async () => {
     const payload = {
       name: $('#sm-name').value.trim(), timing: $('#sm-timing').value,
       detail: $('#sm-detail').value.trim(), target: $('#sm-target').value.trim(),
     };
-    if (!payload.name) return toast('種目名を入れてください');
+    if (!payload.name) { toast('種目名を入れてください'); return; }
     try {
       if (editId) {
         const updated = await put('/api/stretches/' + editId, payload);
@@ -937,7 +1076,7 @@ async function stretchManageModal() {
       }
       resetForm(); renderList();
     } catch (e) { toast(e.message); }
-  };
+  }, '');
   $('#sm-close').onclick = () => { closeModal(); renderers.stretch(); };
 }
 
@@ -952,12 +1091,12 @@ function romModal() {
       <button class="btn-primary grow" id="rom-save">保存</button>
     </div>`);
   $('#rom-cancel').onclick = closeModal;
-  $('#rom-save').onclick = async () => {
+  guard($('#rom-save'), async () => {
     const note = $('#rom-note').value.trim();
-    if (!note) return toast('メモを入れてください');
+    if (!note) { toast('メモを入れてください'); return; }
     await post('/api/rom', { date: $('#rom-date').value, note });
     closeModal(); toast('保存しました'); renderers.stretch();
-  };
+  });
 }
 
 // ==================================================
@@ -1028,7 +1167,7 @@ function mealModal() {
       <button class="btn-primary grow" id="m-save">保存</button>
     </div>`);
   $('#m-cancel').onclick = closeModal;
-  $('#m-save').onclick = async () => {
+  guard($('#m-save'), async () => {
     await post('/api/meals', {
       date: $('#m-date').value, name: $('#m-name').value,
       protein: $('#m-p').value, calories: $('#m-cal').value,
@@ -1036,7 +1175,7 @@ function mealModal() {
     });
     closeModal(); toast('保存しました');
     if (state.view === 'meal') renderers.meal(); else if (state.view === 'home') renderers.home();
-  };
+  });
 }
 
 // ==================================================
@@ -1086,14 +1225,14 @@ function bodyModal() {
       <button class="btn-primary grow" id="b-save">保存</button>
     </div>`);
   $('#b-cancel').onclick = closeModal;
-  $('#b-save').onclick = async () => {
+  guard($('#b-save'), async () => {
     await post('/api/body', {
       date: $('#b-date').value, weight: $('#b-weight').value,
       body_fat: $('#b-fat').value, note: $('#b-note').value,
     });
     closeModal(); toast('保存しました');
     if (state.view === 'body') renderers.body(); else if (state.view === 'home') renderers.home();
-  };
+  });
 }
 
 // ==================================================
