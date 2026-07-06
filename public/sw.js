@@ -1,6 +1,6 @@
 'use strict';
-// シンプルなアプリシェルキャッシュ。APIはネットワーク優先。
-const CACHE = 'muscle-app-v12';
+// アプリシェルはネットワーク優先（更新が即反映）。オフライン時のみキャッシュにフォールバック。
+const CACHE = 'muscle-app-v13';
 const SHELL = [
   '/',
   '/index.html',
@@ -31,8 +31,16 @@ self.addEventListener('fetch', (e) => {
     // API: ネットワーク優先（オフライン時はエラー）
     return;
   }
-  // 静的: キャッシュ優先 + フォールバック
+  // 静的: ネットワーク優先。取得できたらキャッシュも更新し、失敗（オフライン）時はキャッシュ
   e.respondWith(
-    caches.match(e.request).then((cached) => cached || fetch(e.request))
+    fetch(e.request)
+      .then((res) => {
+        if (res.ok && e.request.method === 'GET') {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy));
+        }
+        return res;
+      })
+      .catch(() => caches.match(e.request))
   );
 });

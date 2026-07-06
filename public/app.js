@@ -1,5 +1,8 @@
 'use strict';
 
+// アプリ版数（sw.js の CACHE 版と合わせて上げる）。ホーム画面下部に表示し、更新反映の確認に使う
+const APP_VERSION = 'v13';
+
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
 const _inflight = new Map();
@@ -86,10 +89,11 @@ function openExternal(url) {
   const onHide = () => { if (document.hidden) switched = true; };
   document.addEventListener('visibilitychange', onHide);
   // Chrome 未インストールだとスキームが無反応 → 少し待って通常ブラウザで開く
+  // （Chromeへの切替に時間がかかる端末もあるため猶予は長め。切替済みなら何もしない）
   const fallback = setTimeout(() => {
     document.removeEventListener('visibilitychange', onHide);
-    if (!switched) window.open(url, '_blank', 'noopener');
-  }, 500);
+    if (!switched && !document.hidden) window.open(url, '_blank', 'noopener');
+  }, 900);
   window.addEventListener('pagehide', () => clearTimeout(fallback), { once: true });
   window.location.href = chromeUrl;
 }
@@ -318,7 +322,8 @@ renderers.home = async function () {
       <div class="muted small">累計トレ回数</div>
       <div class="big">${s.total_workouts} <span class="unit muted" style="font-size:14px">回</span></div>
     </div>
-    <button class="btn-ghost btn-block btn-sm" id="logout-btn" style="margin-top:8px">ログアウト</button>`;
+    <button class="btn-ghost btn-block btn-sm" id="logout-btn" style="margin-top:8px">ログアウト</button>
+    <div class="muted small" style="text-align:center;margin-top:10px;opacity:.6">app ${APP_VERSION}</div>`;
   $('#q-workout').onclick = () => workoutModal();
   $('#q-meal').onclick = () => mealModal();
   $('#q-body').onclick = () => bodyModal();
@@ -1275,6 +1280,9 @@ async function init() {
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => {
     if (state.view === 'body' || state.view === 'stats') renderers[state.view]();
   }, 250); });
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  // updateViaCache:'none' で sw.js 自体を常にネットワーク確認（更新の取りこぼし防止）
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => {});
+  }
 }
 init();
