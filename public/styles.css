@@ -182,6 +182,9 @@ canvas { width: 100%; height: auto; display: block; }
   cursor: pointer;
 }
 
+/* ===== 統計タブ（全体/種目別） ===== */
+.seg-active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+
 /* ===== 対象筋表示 ===== */
 .muscles {
   color: var(--blue);

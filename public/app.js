@@ -1,7 +1,7 @@
 'use strict';
 
 // アプリ版数（sw.js の CACHE 版と合わせて上げる）。ホーム画面下部に表示し、更新反映の確認に使う
-const APP_VERSION = 'v13';
+const APP_VERSION = 'v14';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -1245,6 +1245,49 @@ function bodyModal() {
 // ==================================================
 renderers.stats = async function () {
   const el = $('#view-stats');
+  const mode = state.statsMode || 'overview';
+  el.innerHTML = `
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn-ghost grow btn-sm ${mode === 'overview' ? 'seg-active' : ''}" id="stats-tab-ov">📊 全体</button>
+      <button class="btn-ghost grow btn-sm ${mode === 'exercise' ? 'seg-active' : ''}" id="stats-tab-ex">🏋️ 種目別</button>
+    </div>
+    <div id="stats-body"></div>`;
+  $('#stats-tab-ov').onclick = () => { state.statsMode = 'overview'; renderers.stats(); };
+  $('#stats-tab-ex').onclick = () => { state.statsMode = 'exercise'; renderers.stats(); };
+  if (mode === 'exercise') await statsExercise($('#stats-body'));
+  else await statsOverview($('#stats-body'));
+};
+
+// 全体統計: 週別推移＋部位別セット数
+async function statsOverview(el) {
+  const o = await get('/api/stats/overview?today=' + todayStr());
+  const CAT_ORDER = ['胸', '背中', '脚', '肩', '腕', '腹', 'その他'];
+  const cats = CAT_ORDER.filter((c) =>
+    o.category_28d.some((r) => r.category === c) || o.category_7d.some((r) => r.category === c));
+  const setsOf = (rows, c) => Number((rows.find((r) => r.category === c) || {}).sets || 0);
+
+  el.innerHTML = `
+    <div class="card"><div class="muted small">週別の総挙上量（t・月曜起点）</div>
+      <canvas id="ov-vol" data-height="160"></canvas></div>
+    <div class="card"><div class="muted small">週別のトレ回数</div>
+      <canvas id="ov-cnt" data-height="140"></canvas></div>
+    <div class="card">
+      <div class="row between"><div class="muted small">部位別セット数（直近7日）</div>
+        <span class="chip">目安 10-20/週</span></div>
+      <canvas id="ov-cat" data-height="150"></canvas>
+      ${cats.length ? `<div class="muted small" style="margin-top:8px">
+        直近4週の平均（/週）: ${cats.map((c) => `${esc(c)} <b>${round(setsOf(o.category_28d, c) / 4, 1)}</b>`).join(' ・ ')}
+      </div>` : ''}
+    </div>`;
+
+  const wl = o.weeks.map((w) => fmtDate(w.week_start).replace(/\(.+\)/, ''));
+  Charts.bar($('#ov-vol'), wl, o.weeks.map((w) => round(w.volume / 1000, 2)), '#4ade80');
+  Charts.bar($('#ov-cnt'), wl, o.weeks.map((w) => Number(w.sessions)), '#60a5fa');
+  Charts.bar($('#ov-cat'), cats, cats.map((c) => setsOf(o.category_7d, c)), '#a78bfa');
+}
+
+// 種目別統計（従来）
+async function statsExercise(el) {
   el.innerHTML = `
     <div class="field"><label>種目を選択</label><select id="stat-ex">${exerciseOptions()}</select></div>
     <div class="card">
@@ -1264,7 +1307,7 @@ renderers.stats = async function () {
   };
   $('#stat-ex').onchange = draw;
   await draw();
-};
+}
 
 // ---------- 起動 ----------
 let _booted = false;

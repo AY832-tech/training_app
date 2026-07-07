@@ -1,6 +1,6 @@
 'use strict';
 // アプリシェルはネットワーク優先（更新が即反映）。オフライン時のみキャッシュにフォールバック。
-const CACHE = 'muscle-app-v13';
+const CACHE = 'muscle-app-v14';
 const SHELL = [
   '/',
   '/index.html',

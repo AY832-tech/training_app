@@ -553,6 +553,38 @@ const api = {
     return { ok: true };
   },
 
+  // 全体統計: 週別推移（挙上量・回数・セット数）と部位別セット数（直近7日・直近28日）
+  'GET /api/stats/overview': async (b, p, query) => {
+    const today = query.today || todayLocal();
+    const d7 = new Date(new Date(today + 'T00:00:00Z').getTime() - 6 * 864e5).toISOString().slice(0, 10);
+    const d28 = new Date(new Date(today + 'T00:00:00Z').getTime() - 27 * 864e5).toISOString().slice(0, 10);
+    // 週の起点は月曜（%w: 0=日曜）
+    const weekExpr = `date(w.date, '-' || ((CAST(strftime('%w', w.date) AS INTEGER) + 6) % 7) || ' days')`;
+    const [rWeeks, rCat7, rCat28] = await db.batchRead([
+      { sql: `SELECT ${weekExpr} AS week_start,
+                     COUNT(DISTINCT w.id) AS sessions,
+                     COALESCE(SUM(ws.weight * ws.reps), 0) AS volume,
+                     COUNT(ws.id) AS sets
+              FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id
+              GROUP BY week_start ORDER BY week_start DESC LIMIT 12`, args: [] },
+      { sql: `SELECT e.category, COUNT(*) AS sets
+              FROM workout_sets ws
+              JOIN workouts w ON w.id = ws.workout_id
+              JOIN exercises e ON e.id = ws.exercise_id
+              WHERE w.date BETWEEN ? AND ? GROUP BY e.category`, args: [d7, today] },
+      { sql: `SELECT e.category, COUNT(*) AS sets
+              FROM workout_sets ws
+              JOIN workouts w ON w.id = ws.workout_id
+              JOIN exercises e ON e.id = ws.exercise_id
+              WHERE w.date BETWEEN ? AND ? GROUP BY e.category`, args: [d28, today] },
+    ]);
+    return {
+      weeks: rWeeks.rows.slice().reverse(), // 古い→新しい順
+      category_7d: rCat7.rows,
+      category_28d: rCat28.rows,
+    };
+  },
+
   'GET /api/stats/exercise/:id': async (b, p) =>
     db.q(`
       SELECT w.date AS date,
