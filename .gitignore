@@ -3,3 +3,7 @@ data/
 *.log
 .DS_Store
 .env
+backup.sql
+backup.sql.enc
+backup-meta.json
+restore-test.db*

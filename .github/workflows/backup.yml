@@ -1,0 +1,68 @@
+name: db-backup
+
+on:
+  schedule:
+    - cron: '0 19 * * *' # JST 04:00
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check required secrets
+        run: |
+          missing=""
+          if [ -z "${TURSO_DATABASE_URL}" ]; then missing="${missing} TURSO_DATABASE_URL"; fi
+          if [ -z "${TURSO_AUTH_TOKEN}" ]; then missing="${missing} TURSO_AUTH_TOKEN"; fi
+          if [ -z "${BACKUP_PASSPHRASE}" ]; then missing="${missing} BACKUP_PASSPHRASE"; fi
+          if [ -n "${missing}" ]; then
+            echo "Error: 以下のsecretsが未設定です:${missing}"
+            echo "Settings > Secrets and variables > Actions で設定してください（docs/BACKUP.md 参照）"
+            exit 1
+          fi
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+
+      - name: Dump database
+        run: node scripts/backup-dump.js backup.sql backup-meta.json
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+
+      - name: Restore test
+        run: node scripts/backup-restore-test.js backup.sql backup-meta.json
+
+      - name: Encrypt dump and remove plaintext
+        run: |
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in backup.sql -out backup.sql.enc -pass env:BACKUP_PASSPHRASE
+          rm -f backup.sql restore-test.db*
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: turso-backup
+          path: |
+            backup.sql.enc
+            backup-meta.json
+          retention-days: 90
+          if-no-files-found: error
