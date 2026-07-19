@@ -1,7 +1,7 @@
 'use strict';
 
 // アプリ版数（sw.js の CACHE 版と合わせて上げる）。ホーム画面下部に表示し、更新反映の確認に使う
-const APP_VERSION = 'v14';
+const APP_VERSION = 'v16';
 
 // ---------- ユーティリティ ----------
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -173,7 +173,7 @@ function openModal(html) {
   $('#modal').innerHTML = html;
   $('#modal-bg').classList.add('open');
 }
-function closeModal() { $('#modal-bg').classList.remove('open'); }
+function closeModal() { $('#modal-bg').classList.remove('open'); hideStepperBar(); }
 $('#modal-bg').addEventListener('click', (e) => { if (e.target.id === 'modal-bg') closeModal(); });
 
 // ---------- 状態 ----------
@@ -353,29 +353,40 @@ renderers.log = async function () {
 
   const list = $('#workout-list');
   if (!workouts.length) { list.innerHTML = `<div class="empty">まだ記録がありません。<br>「＋ 新しいトレ記録」から始めましょう💪</div>`; return; }
-  list.innerHTML = workouts.map((w) => {
+  const groups = [];
+  workouts.forEach((w) => {
+    let group = groups.find((g) => g.date === w.date);
+    if (!group) { group = { date: w.date, workouts: [] }; groups.push(group); }
+    group.workouts.push(w);
+  });
+  const workoutHtml = (w) => {
     const vol = w.sets.reduce((a, s) => a + s.weight * s.reps, 0);
     const byEx = {};
     w.sets.forEach((s) => { (byEx[s.exercise_name] ||= []).push(s); });
     const exHtml = Object.entries(byEx).map(([name, sets]) =>
       `<div class="small" style="margin-top:6px"><b>${esc(name)}</b> <span class="muted">${
         sets.map((s) => `${round(s.weight)}${esc(sets[0].unit)}×${s.reps}`).join(' / ')}</span></div>`).join('');
-    return `<div class="card tap" data-id="${w.id}">
+    return `<div class="workout-entry tap" data-id="${w.id}">
       <div class="row between">
-        <div><b>${fmtDate(w.date)}</b> <span class="chip">${w.sets.length} セット</span></div>
+        <div><span class="chip">${w.sets.length} セット</span></div>
         <div class="muted small">${round(vol)} kg·rep</div>
       </div>
       ${exHtml}
       ${w.note ? `<div class="muted small" style="margin-top:8px">📝 ${esc(w.note)}</div>` : ''}
     </div>`;
-  }).join('');
-  list.querySelectorAll('.card').forEach((c) =>
+  };
+  list.innerHTML = groups.map((g) => `<div class="card workout-day">
+    <div class="workout-day-title"><b>${fmtDate(g.date)}</b>
+      <span class="muted small">${g.workouts.length > 1 ? `${g.workouts.length}件` : ''}</span></div>
+    ${g.workouts.map(workoutHtml).join('')}
+  </div>`).join('');
+  list.querySelectorAll('.workout-entry').forEach((c) =>
     c.onclick = () => { const w = workouts.find((x) => x.id === Number(c.dataset.id)); workoutModal(w); });
 };
 
 // 自由入力モードの1行（種目ドロップダウン付き）
 function setLineHtml(set = {}) {
-  return `<div class="set-line" data-set>
+  return `<div class="set-line" data-set data-manual="${set.manual_override ? '1' : '0'}">
     <span class="num">●</span>
     <select class="grow" data-ex>${exerciseOptions(set.exercise_id, true)}</select>
     <input type="number" inputmode="decimal" step="0.5" placeholder="kg" style="width:60px" data-w value="${set.weight ?? ''}">
@@ -386,8 +397,8 @@ function setLineHtml(set = {}) {
 }
 
 // Day モードの1行（種目は固定）
-function daySetRow(exId, unit, w, r) {
-  return `<div class="set-line" data-set data-ex="${exId}">
+function daySetRow(exId, unit, w, r, manualOverride = false) {
+  return `<div class="set-line" data-set data-ex="${exId}" data-manual="${manualOverride ? '1' : '0'}">
     <span class="num">●</span>
     <input type="number" inputmode="decimal" step="0.5" placeholder="重量" style="width:72px" data-w value="${w ?? ''}">
     <span class="muted small" style="min-width:18px">${esc(unit || 'kg')}</span>
@@ -398,13 +409,15 @@ function daySetRow(exId, unit, w, r) {
 }
 
 // Day モードの種目グループ（前回値・推奨重量つき）
-function exGroupHtml(pe) {
+function exGroupHtml(pe, savedSets = null) {
   const sug = pe.suggestion || { weight: null, source: 'none' };
   const last = pe.last_session;
   const lastTxt = last && last.sets.length
     ? last.sets.map((s) => `${round(s.weight)}×${s.reps}`).join(' / ') : 'なし';
   const srcLabel = { progress: '↑漸進', last: '前回維持', manual: '手動指定', none: '' }[sug.source] || '';
-  const rows = Array.from({ length: pe.target_sets }, () => daySetRow(pe.exercise_id, pe.unit, sug.weight)).join('');
+  const rows = savedSets && savedSets.length
+    ? savedSets.map((s) => daySetRow(pe.exercise_id, pe.unit, s.weight, s.reps, s.manual_override)).join('')
+    : Array.from({ length: pe.target_sets }, () => daySetRow(pe.exercise_id, pe.unit, sug.weight)).join('');
   return `<div class="ex-group" data-exgroup data-ex="${pe.exercise_id}" data-sugw="${sug.weight ?? ''}" data-sugsrc="${sug.source}">
     <div class="row between" style="align-items:center">
       <span class="row" style="gap:8px;align-items:center" data-exinfo="${esc(pe.exercise_name)}">
@@ -422,23 +435,201 @@ function exGroupHtml(pe) {
   </div>`;
 }
 
+// ---------- セット入力 ±ステッパー ----------
+// #sets 内の focusin をモーダルごとに1つだけ委譲し（行の個別バインドはしない）、
+// フォーカス中の入力(data-w/data-r)に応じたボタン列を body 直下の単一バーで使い回す。
+// 複製⧉・＋セット・Dayメニュー選択で後から増えた行にも、委譲方式のため自動で効く。
+let stepperBarEl = null;
+function ensureStepperBar() {
+  if (stepperBarEl) return stepperBarEl;
+  const bar = document.createElement('div');
+  bar.id = 'stepper-bar';
+  bar.className = 'stepper-bar';
+  document.body.appendChild(bar);
+  // pointerdown で処理する（mouse/touch 両対応）。preventDefault で入力のフォーカスを保持し、
+  // モバイルでキーボードを閉じずに連打できるようにする。click に依存すると iOS では
+  // touchstart の preventDefault が click を抑止して発火しないため、pointerdown で直接加算する。
+  bar.addEventListener('pointerdown', (e) => {
+    const b = e.target.closest('[data-step]');
+    if (!b) return;
+    e.preventDefault(); // 入力のフォーカスを外さない（キーボードを閉じない）
+    const inp = bar._target;
+    if (!inp) return;
+    let v = parseFloat(inp.value); // 空欄は0として扱ってから加算
+    if (Number.isNaN(v)) v = 0;
+    v += Number(b.dataset.step);
+    if (v < 0) v = 0; // 下限0（負にしない）
+    v = bar.dataset.mode === 'w' ? Math.round(v * 2) / 2 : Math.round(v); // 重量は0.5丸め維持・回数は整数
+    inp.value = v;
+  });
+  stepperBarEl = bar;
+  return bar;
+}
+function showStepperBar(inp, mode) {
+  const bar = ensureStepperBar();
+  bar.dataset.mode = mode;
+  bar._target = inp;
+  bar.innerHTML = (mode === 'w' ? ['-5', '-2.5', '+2.5', '+5'] : ['-1', '+1'])
+    .map((v) => `<button type="button" data-step="${v}">${v}</button>`).join('');
+  // 休憩タイマーのバーが表示中なら、その上に積んで重ならないようにする
+  bar.style.bottom = (restTimerBarEl && restTimerBarEl.classList.contains('show'))
+    ? restTimerBarEl.offsetHeight + 'px' : '0';
+  bar.classList.add('show');
+}
+function hideStepperBar() { if (stepperBarEl) stepperBarEl.classList.remove('show'); }
+
+// ---------- 休憩タイマー ----------
+// モジュールレベルで単一のタイマー状態を持つ（新規開始時は前のタイマーを止めてから始める）。
+// 表示は document.body 直下の単一フロートバーで、モーダルを閉じても残る。
+const restTimer = { endAt: 0, interval: null, wakeLock: null, fired: true, audioCtx: null };
+let restTimerBarEl = null;
+function ensureRestTimerBar() {
+  if (restTimerBarEl) return restTimerBarEl;
+  const bar = document.createElement('div');
+  bar.id = 'rest-timer-bar';
+  bar.className = 'rest-timer-bar';
+  bar.innerHTML = `<span id="rest-timer-txt"></span><button type="button" id="rest-timer-stop">✕</button>`;
+  document.body.appendChild(bar);
+  $('#rest-timer-stop', bar).onclick = () => stopRestTimer();
+  restTimerBarEl = bar;
+  return bar;
+}
+function updateRestTimerDisplay() {
+  if (!restTimerBarEl) return;
+  const remain = Math.max(0, restTimer.endAt - Date.now());
+  const totalSec = Math.ceil(remain / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  const txt = $('#rest-timer-txt', restTimerBarEl);
+  if (txt) txt.textContent = `⏱ 休憩 残り ${m}:${String(s).padStart(2, '0')}`;
+}
+function tickRestTimer() {
+  // 毎tickで絶対時刻(endAt)から残時間を再計算する（積算しない＝ドリフト防止）
+  if (Date.now() >= restTimer.endAt) { finishRestTimer(); return; }
+  updateRestTimerDisplay();
+}
+function playRestBeep() {
+  const ctx = restTimer.audioCtx;
+  if (!ctx) return;
+  // OscillatorNode で短いビープを3回鳴らす（アセット不要）
+  for (let i = 0; i < 3; i++) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 880;
+    gain.gain.value = 0.2;
+    osc.connect(gain).connect(ctx.destination);
+    const t = ctx.currentTime + i * 0.35;
+    osc.start(t);
+    osc.stop(t + 0.2);
+  }
+}
+function finishRestTimer() {
+  if (restTimer.fired) return; // 二重発火防止
+  restTimer.fired = true;
+  if (restTimer.interval) { clearInterval(restTimer.interval); restTimer.interval = null; }
+  try { playRestBeep(); } catch (e) { /* 再生失敗は無視して継続 */ }
+  navigator.vibrate?.([200, 100, 200]); // iOSは未定義のためオプショナルチェーンでno-op
+  toast('休憩おわり');
+  if (restTimer.wakeLock) { restTimer.wakeLock.release?.().catch(() => {}); restTimer.wakeLock = null; }
+  if (restTimerBarEl) restTimerBarEl.classList.remove('show');
+}
+function stopRestTimer() {
+  if (restTimer.interval) { clearInterval(restTimer.interval); restTimer.interval = null; }
+  restTimer.fired = true;
+  if (restTimer.wakeLock) { restTimer.wakeLock.release?.().catch(() => {}); restTimer.wakeLock = null; }
+  if (restTimerBarEl) restTimerBarEl.classList.remove('show');
+}
+async function startRestTimer(ms) {
+  stopRestTimer(); // 前のタイマーを止めてから開始（プリセット連打での多重起動を防ぐ）
+  restTimer.fired = false;
+  restTimer.endAt = Date.now() + ms;
+  // 音のアンロックはユーザー操作(このプリセットタップ)起点で行う
+  try {
+    if (!restTimer.audioCtx) restTimer.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (restTimer.audioCtx.state === 'suspended') await restTimer.audioCtx.resume();
+  } catch (e) { /* AudioContext非対応等は無視（音無しで継続） */ }
+  // WakeLockはベストエフォート。非対応/失敗でも全体を止めない
+  try { restTimer.wakeLock = (await navigator.wakeLock?.request('screen')) || null; }
+  catch (e) { restTimer.wakeLock = null; }
+  const bar = ensureRestTimerBar();
+  bar.classList.add('show');
+  updateRestTimerDisplay();
+  restTimer.interval = setInterval(tickRestTimer, 250);
+  toast('休憩タイマー開始');
+}
+function restTimerPresetModal() {
+  const presets = [
+    { label: '30秒', ms: 30 * 1000 },
+    { label: '1分', ms: 60 * 1000 },
+    { label: '1分30秒', ms: 90 * 1000 },
+    { label: '2分', ms: 120 * 1000 },
+    { label: '3分', ms: 180 * 1000 },
+  ];
+  const el = document.createElement('div');
+  el.className = 'info-overlay';
+  el.innerHTML = `
+    <div class="info-box">
+      <h3 style="margin:0 0 12px;text-align:center">休憩タイマー</h3>
+      <div class="row wrap" style="justify-content:center">
+        ${presets.map((p, i) => `<button class="btn-ghost btn-sm" data-preset="${i}" type="button" style="min-width:74px">${p.label}</button>`).join('')}
+      </div>
+      <button class="btn-ghost btn-block btn-sm" data-cancel type="button" style="margin-top:14px">キャンセル</button>
+    </div>`;
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-preset]');
+    if (b) { startRestTimer(presets[Number(b.dataset.preset)].ms); el.remove(); return; }
+    if (e.target === el || e.target.closest('[data-cancel]')) el.remove();
+  });
+  document.body.appendChild(el);
+}
+// バックグラウンド復帰時、期限切れなら終了処理を一度だけ発火（iOSはロック中に間隔が止まるため）
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!restTimer.interval || restTimer.fired) return;
+  if (Date.now() >= restTimer.endAt) finishRestTimer(); else updateRestTimerDisplay();
+});
+
 async function workoutModal(existing) {
   const isEdit = !!existing;
   let prog = null;
-  if (!isEdit) { try { prog = await get('/api/program/active'); } catch (e) {} }
+  let savedProgramFound = false;
+  if (isEdit && existing.version_id) {
+    try {
+      const versions = await get('/api/program');
+      prog = versions.find((v) => Number(v.id) === Number(existing.version_id)) || null;
+      savedProgramFound = !!prog;
+    } catch (e) {}
+  }
+  if (!prog) {
+    try { prog = await get('/api/program/active'); } catch (e) {}
+  }
+
+  const restoredDay = savedProgramFound && prog && prog.days
+    ? prog.days.find((d) => Number(d.id) === Number(existing?.day_id)) || null : null;
+  let initialSetsHtml = (isEdit ? existing.sets : [{}]).map(setLineHtml).join('');
+  if (restoredDay) {
+    let remaining = [...(existing.sets || [])];
+    initialSetsHtml = restoredDay.exercises.map((pe) => {
+      const matched = remaining.filter((s) => Number(s.exercise_id) === Number(pe.exercise_id));
+      remaining = remaining.filter((s) => Number(s.exercise_id) !== Number(pe.exercise_id));
+      return exGroupHtml(pe, matched);
+    }).join('') + remaining.map(setLineHtml).join('');
+  }
 
   const dayOptions = prog && prog.days
-    ? prog.days.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join('') : '';
+    ? prog.days.map((d) => `<option value="${d.id}" ${restoredDay && Number(d.id) === Number(restoredDay.id) ? 'selected' : ''}>${esc(d.name)}</option>`).join('') : '';
 
   openModal(`
     <h3>${isEdit ? 'トレ記録を編集' : 'トレを記録'}</h3>
     <div class="field"><label>日付</label><input type="date" id="w-date" value="${existing?.date || todayStr()}"></div>
-    ${isEdit ? '' : (dayOptions ? `<div class="field"><label>メニューの日を選ぶ</label>
-      <select id="day-pick"><option value="">自由入力</option>${dayOptions}</select></div>` : '')}
+    ${dayOptions ? `<div class="field"><label>メニューの日を選ぶ</label>
+      <select id="day-pick"><option value="">自由入力</option>${dayOptions}</select></div>` : ''}
     <label>種目・セット</label>
-    <div id="sets">${(isEdit ? existing.sets : [{}]).map(setLineHtml).join('')}</div>
-    <button class="btn-ghost btn-block btn-sm" id="add-set" type="button" style="margin-bottom:12px">＋ セット追加</button>
-    <button class="btn-ghost btn-block btn-sm" id="add-ex" type="button" style="margin-bottom:12px;display:none">＋ 種目を追加（今回だけ）</button>
+    <div id="sets">${initialSetsHtml}</div>
+    <button class="btn-ghost btn-block btn-sm" id="add-set" type="button" style="margin-bottom:12px;${restoredDay ? 'display:none' : ''}">＋ セット追加</button>
+    <button class="btn-ghost btn-block btn-sm" id="rest-timer-btn" type="button" style="margin-bottom:12px">⏱ 休憩</button>
+    <button class="btn-ghost btn-block btn-sm" id="add-ex" type="button" style="margin-bottom:12px;${restoredDay ? '' : 'display:none'}">＋ 種目を追加（今回だけ）</button>
     <div class="field"><label>メモ</label><textarea id="w-note" rows="2" placeholder="調子・気づきなど">${esc(existing?.note || '')}</textarea></div>
     <div class="row">
       ${isEdit ? `<button class="btn-danger" id="w-del">削除</button>` : ''}
@@ -447,8 +638,8 @@ async function workoutModal(existing) {
     </div>`);
 
   const setsEl = $('#sets');
-  let mode = 'free';
-  let dayId = existing?.day_id || null;
+  let mode = restoredDay ? 'day' : 'free';
+  let dayId = restoredDay ? restoredDay.id : null;
 
   const bindRemovers = () => setsEl.querySelectorAll('[data-rm]').forEach((b) =>
     b.onclick = () => {
@@ -486,6 +677,20 @@ async function workoutModal(existing) {
       rebind();
     });
   rebind();
+  if (restoredDay) bindAddRows();
+
+  // ±ステッパー: #sets への focusin/focusout の委譲を1つだけ張る（行の個別バインドはしない）。
+  // 動的に増えた行（複製⧉・＋セット・Dayメニュー選択）も setsEl の子である限り自動で効く。
+  setsEl.addEventListener('focusin', (e) => {
+    const inp = e.target.closest('[data-w],[data-r]');
+    if (!inp) return;
+    showStepperBar(inp, inp.hasAttribute('data-w') ? 'w' : 'r');
+  });
+  setsEl.addEventListener('focusout', () => {
+    setTimeout(() => { if (!setsEl.contains(document.activeElement)) hideStepperBar(); }, 0);
+  });
+
+  $('#rest-timer-btn').onclick = () => restTimerPresetModal();
 
   $('#add-set').onclick = () => {
     const last = setsEl.querySelector('.set-line:last-child');
@@ -523,7 +728,7 @@ async function workoutModal(existing) {
       const w = $('[data-w]', r).value;
       const reps = $('[data-r]', r).value;
       const exId = Number(r.dataset.ex || ($('[data-ex]', r) ? $('[data-ex]', r).value : 0));
-      let manual = false;
+      let manual = r.dataset.manual === '1';
       const grp = r.closest('[data-exgroup]');
       if (grp) {
         const sugw = grp.dataset.sugw, src = grp.dataset.sugsrc;
@@ -531,13 +736,15 @@ async function workoutModal(existing) {
         else if (sugw !== '' && w !== '' && Number(w) !== Number(sugw)) manual = true;
       }
       return { exercise_id: exId, weight: w, reps, manual_override: manual };
-    }).filter((s) => s.exercise_id && (s.reps !== '' || s.weight !== ''));
+    }).filter((s) => Number.isInteger(s.exercise_id) && s.exercise_id > 0 &&
+      Number.isFinite(Number(s.weight)) && Number(s.weight) > 0 &&
+      Number.isFinite(Number(s.reps)) && Number(s.reps) > 0);
 
     const payload = {
       date: $('#w-date').value,
       note: $('#w-note').value,
-      version_id: (mode === 'day' && prog) ? prog.id : (existing?.version_id || null),
-      day_id: (mode === 'day') ? dayId : (existing?.day_id || null),
+      version_id: (mode === 'day' && prog) ? prog.id : (isEdit ? existing.version_id || null : null),
+      day_id: (mode === 'day') ? dayId : null,
       sets,
     };
     if (!payload.date) return toast('日付を入れてください');
@@ -954,6 +1161,7 @@ renderers.stretch = async function () {
     </div>
     ${section('pre', '🔥 トレーニング前（動的）', 'トレ日に実施')}
     ${section('post', '🧘 トレ後・休息日（静的）', '各30〜60秒×2セット・週3〜5回')}
+    <button class="btn-primary btn-block" id="st-save" style="margin-bottom:12px">保存</button>
     <div class="card">
       <div class="row between" style="align-items:center">
         <div style="font-weight:600">📏 可動域（ROM）の記録</div>
@@ -966,17 +1174,20 @@ renderers.stretch = async function () {
   $('#st-date').onchange = (e) => { state.stretchDate = e.target.value; renderers.stretch(); };
   $('#st-manage').onclick = () => stretchManageModal();
 
-  const save = async (id) => {
-    const done = $(`.st-check[data-st="${id}"]`).checked;
-    const secEl = $(`[data-sec="${id}"]`);
-    await post('/api/stretch-logs', {
-      date: state.stretchDate, stretch_id: id, done, seconds: secEl ? secEl.value : null,
+  guard($('#st-save'), async () => {
+    const entries = [...el.querySelectorAll('.st-check')].map((c) => {
+      const id = Number(c.dataset.st);
+      const secEl = $(`[data-sec="${id}"]`, el);
+      return {
+        date: state.stretchDate,
+        stretch_id: id,
+        done: c.checked,
+        seconds: secEl && secEl.value !== '' ? secEl.value : null,
+      };
     });
-  };
-  el.querySelectorAll('.st-check').forEach((c) =>
-    c.onchange = () => save(Number(c.dataset.st)).then(() => toast(c.checked ? '実施を記録 ✅' : '記録を解除')));
-  el.querySelectorAll('[data-sec]').forEach((inp) =>
-    inp.onchange = () => save(Number(inp.dataset.sec)));
+    await Promise.all(entries.map((entry) => post('/api/stretch-logs', entry)));
+    toast('保存しました');
+  });
 
   const roms = await get('/api/rom');
   $('#rom-list').innerHTML = roms.length

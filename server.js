@@ -203,6 +203,22 @@ async function clearUsedManual(versionId, sets) {
     [...exIds, versionId]);
 }
 
+// 保存可能なセットだけに正規化する。存在しない種目や0以下・非数値の重量/回数は記録しない。
+async function normalizeWorkoutSets(sets) {
+  const candidates = (Array.isArray(sets) ? sets : []).map((s) => ({
+    exercise_id: Number(s && s.exercise_id),
+    weight: Number(s && s.weight),
+    reps: Number(s && s.reps),
+    manual_override: s && s.manual_override ? 1 : 0,
+  })).filter((s) => Number.isInteger(s.exercise_id) && s.exercise_id > 0 &&
+    Number.isFinite(s.weight) && s.weight > 0 && Number.isFinite(s.reps) && s.reps > 0);
+  if (!candidates.length) return [];
+  const ids = [...new Set(candidates.map((s) => s.exercise_id))];
+  const rows = await db.q(`SELECT id FROM exercises WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+  const validIds = new Set(rows.map((r) => idn(r.id)));
+  return candidates.filter((s) => validIds.has(s.exercise_id));
+}
+
 // ---- API ハンドラ（すべて async）----
 const api = {
   'GET /api/exercises': async () =>
@@ -235,28 +251,30 @@ const api = {
   },
 
   'POST /api/workouts': async (b) => {
+    const sets = await normalizeWorkoutSets(b.sets);
+    if (!sets.length) throw new Error('重量・回数が0より大きいセットを入力してください');
     const r = await db.run('INSERT INTO workouts (date, note, version_id, day_id) VALUES (?, ?, ?, ?)',
       [b.date, String(b.note || ''), b.version_id || null, b.day_id || null]);
     const wid = idn(r.lastInsertRowid);
-    if ((b.sets || []).length) {
-      await db.batch(b.sets.map((s, i) => ({
-        sql: 'INSERT INTO workout_sets (workout_id, exercise_id, set_order, weight, reps, manual_override) VALUES (?, ?, ?, ?, ?, ?)',
-        args: [wid, s.exercise_id, i, num(s.weight), num(s.reps), s.manual_override ? 1 : 0],
-      })));
-      await clearUsedManual(b.version_id, b.sets);
-    }
+    await db.batch(sets.map((s, i) => ({
+      sql: 'INSERT INTO workout_sets (workout_id, exercise_id, set_order, weight, reps, manual_override) VALUES (?, ?, ?, ?, ?, ?)',
+      args: [wid, s.exercise_id, i, s.weight, s.reps, s.manual_override],
+    })));
+    await clearUsedManual(b.version_id, sets);
     return (await attachSets(await db.q('SELECT * FROM workouts WHERE id = ?', [wid])))[0];
   },
 
   'PUT /api/workouts/:id': async (b, p) => {
     const id = idn(p.id);
+    const sets = await normalizeWorkoutSets(b.sets);
+    if (!sets.length) throw new Error('重量・回数が0より大きいセットを入力してください');
     const stmts = [
       { sql: 'UPDATE workouts SET date = ?, note = ?, version_id = ?, day_id = ? WHERE id = ?',
         args: [b.date, String(b.note || ''), b.version_id || null, b.day_id || null, id] },
       { sql: 'DELETE FROM workout_sets WHERE workout_id = ?', args: [id] },
-      ...(b.sets || []).map((s, i) => ({
+      ...sets.map((s, i) => ({
         sql: 'INSERT INTO workout_sets (workout_id, exercise_id, set_order, weight, reps, manual_override) VALUES (?, ?, ?, ?, ?, ?)',
-        args: [id, s.exercise_id, i, num(s.weight), num(s.reps), s.manual_override ? 1 : 0],
+        args: [id, s.exercise_id, i, s.weight, s.reps, s.manual_override],
       })),
     ];
     await db.batch(stmts);
